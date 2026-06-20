@@ -47,6 +47,9 @@ This is the core translation execution endpoint. Send a payload utilizing your p
 - `odata`
 - `avro`
 - `thrift`
+- `parquet`
+- `msgpack`
+- `capnproto`
 
 #### Request Example (cURL)
 
