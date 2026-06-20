@@ -13,6 +13,7 @@ server
 
 # Design Documents
 Design.md
+Implementation.md
 *.pdf
 
 # Ignore test files

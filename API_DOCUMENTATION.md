@@ -1,46 +1,33 @@
-# Omni-Schema Gateway API Documentation
+# API Documentation
 
-This document describes how to use the Omni-Schema Gateway endpoints to upload schemas and execute payload morphing.
+Welcome to the Omni-Schema Gateway API manual. This document provides a straightforward guide on how to interact with the gateway's endpoints to perform high-performance schema morphing.
 
-## 1. Schema Ingestion API
+## 1. Schema Ingestion
 
-Use this endpoint to upload and register custom schemas (e.g., `.proto`, `.graphql`, OpenAPI `.json`). The gateway dynamically parses these schemas from scratch and builds a Unified Intermediate Representation (UIR).
+Before morphing complex binary protocols like Cap'n Proto or Protobuf, the gateway needs to understand your structural definitions.
 
 ### `POST /system/schema`
 
-> [!NOTE]
-> This endpoint requires a `multipart/form-data` request containing the schema files.
+Upload your raw schema files (like `.proto`, `.capnp`, or `.graphql`) using a multipart form request.
 
 #### Request Example (cURL)
 
 ```bash
 curl -X POST http://localhost:8080/system/schema \
   -H "Content-Type: multipart/form-data" \
-  -F "schema=@/path/to/service.proto" \
-  -F "schema=@/path/to/schema.graphql"
+  -F "file=@schema.proto"
 ```
 
-#### Response Example
+## 2. Payload Morphing
 
-```json
-{
-  "status": "Schema successfully registered in UIR."
-}
-```
-
----
-
-## 2. Payload Morphing API
-
-This is the core translation execution endpoint. Send a payload utilizing your predefined source schema format, and the gateway will parse it, traverse the UIR graph, and dynamically synthesize the target format natively.
+Once your schemas are loaded, you can translate incoming payloads from one protocol format directly into another in real-time.
 
 ### `POST /morph/{source}/{target}`
 
-> [!IMPORTANT]
-> The source and target path parameters determine the lexer and synthesizer pipelines used. 
+- **`{source}`**: The protocol format of the data you are sending.
+- **`{target}`**: The protocol format you want to receive back.
 
 #### Valid Translators
-
 - `protobuf`
 - `graphql`
 - `json`
@@ -54,17 +41,13 @@ This is the core translation execution endpoint. Send a payload utilizing your p
 
 #### Request Example (cURL)
 
-Converting a standard JSON payload into a Protobuf binary payload.
-
 ```bash
 curl -X POST http://localhost:8080/morph/json/protobuf \
   -H "Content-Type: application/json" \
-  -d '{"id": 1, "name": "API Morphing Gateway"}'
+  -d '{"id": 123, "name": "Test"}'
 ```
 
 #### Response Example
-
-*(Binary byte stream of the Protobuf output)*
 
 ```text
 Morphed json to protobuf natively without dependencies. Original payload: 45 bytes.
@@ -78,8 +61,7 @@ The gateway supports fully native, zero-dependency WebSockets for executing cont
 
 ### `GET /graphql/subscriptions`
 
-> [!NOTE]
-> This endpoint requires WebSocket protocol headers.
+This endpoint requires WebSocket protocol upgrade headers.
 
 #### Request Example (cURL WebSocket Emulation)
 
