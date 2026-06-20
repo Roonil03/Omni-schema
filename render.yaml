@@ -2,6 +2,6 @@ services:
   - type: web
     name: morph-gateway
     env: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Docker/Dockerfile
     plan: free
     autoDeploy: false
