@@ -1,14 +1,14 @@
 # API Documentation
 
-Welcome to the Omni-Schema Gateway API manual. This document provides a straightforward guide on how to interact with the gateway's endpoints to perform high-performance schema morphing.
+This document provides a guide on how to interact with the Omni-Schema Gateway's endpoints to perform high-performance schema morphing.
 
 ## 1. Schema Ingestion
 
-Before morphing complex binary protocols like Cap'n Proto or Protobuf, the gateway needs to understand your structural definitions.
+Before morphing complex binary protocols such as Cap'n Proto or Protobuf, the gateway requires structural definitions.
 
 ### `POST /system/schema`
 
-Upload your raw schema files (like `.proto`, `.capnp`, or `.graphql`) using a multipart form request.
+Raw schema files (`.proto`, `.capnp`, or `.graphql`) can be uploaded using a multipart form request.
 
 #### Request Example (cURL)
 
@@ -20,12 +20,12 @@ curl -X POST http://localhost:8080/system/schema \
 
 ## 2. Payload Morphing
 
-Once your schemas are loaded, you can translate incoming payloads from one protocol format directly into another in real-time.
+Once schemas are loaded, incoming payloads can be translated from one protocol format directly into another in real-time.
 
 ### `POST /morph/{source}/{target}`
 
-- **`{source}`**: The protocol format of the data you are sending.
-- **`{target}`**: The protocol format you want to receive back.
+- **`{source}`**: The protocol format of the incoming payload.
+- **`{target}`**: The desired protocol format for the response.
 
 #### Valid Translators
 - `protobuf`
@@ -61,7 +61,7 @@ The gateway supports fully native, zero-dependency WebSockets for executing cont
 
 ### `GET /graphql/subscriptions`
 
-This endpoint requires WebSocket protocol upgrade headers.
+This endpoint requires standard WebSocket protocol upgrade headers.
 
 #### Request Example (cURL WebSocket Emulation)
 
