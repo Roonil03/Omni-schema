@@ -6,6 +6,7 @@
 ![Protocols](https://img.shields.io/badge/Protocols-10-blue?style=for-the-badge)
 
 Omni-Schema Gateway is an advanced, high-performance API morphing service built entirely from scratch in Go. Operating on an Analysis-Synthesis compiler model, the gateway translates arbitrary payloads between highly complex binary and text protocols.
+
 ---
 
 ## Features
