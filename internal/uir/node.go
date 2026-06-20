@@ -5,7 +5,7 @@ package uir
 type Node struct {
 	Type  UIRType
 	Key   string
-	Value interface{}
+	Value any
 
 	// Edges to other nodes in the graph
 	Children []*Node
@@ -19,7 +19,7 @@ type Node struct {
 }
 
 // NewNode initializes a new UIR Node. (Note: AllocNode in memory.go is preferred for high-throughput)
-func NewNode(t UIRType, key string, val interface{}) *Node {
+func NewNode(t UIRType, key string, val any) *Node {
 	return &Node{
 		Type:            t,
 		Key:             key,

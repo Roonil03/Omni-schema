@@ -3,7 +3,7 @@ package uir
 import "sync"
 
 var nodePool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return &Node{
 			TypeAnnotations: make(map[string]string),
 		}
@@ -24,18 +24,18 @@ func FreeNode(n *Node) {
 	n.Type = TypeUnknown
 	n.Key = ""
 	n.Value = nil
-	
+
 	// Retain the capacity of the slice but clear elements
 	if n.Children != nil {
 		n.Children = n.Children[:0]
 	}
-	
+
 	n.Parent = nil
 	n.ElementType = TypeUnknown
-	
+
 	for k := range n.TypeAnnotations {
 		delete(n.TypeAnnotations, k)
 	}
-	
+
 	nodePool.Put(n)
 }
