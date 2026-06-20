@@ -14,12 +14,12 @@ Omni-Schema Gateway is an advanced, high-performance API morphing service built 
 The gateway acts as a universal translator. It parses incoming structures into a Universal Intermediate Representation (UIR) graph, enabling seamless, native morphing between disparate protocols.
 
 Supported formats and protocols include:
-- Standard Formats: JSON, Protobuf
-- Zero-Copy and Memory-Aligned: Cap'n Proto
-- Schemaless Binary: MessagePack
-- Columnar and Big Data: Apache Parquet
-- Hierarchical Multidimensional: HDF5
-- Real-Time Streaming: Native GraphQL Subscriptions running over custom RFC 6455 WebSockets
+- Standard Formats: [JSON](https://www.json.org/), [Protobuf](https://protobuf.dev/)
+- Zero-Copy and Memory-Aligned: [Cap'n Proto](https://capnproto.org/)
+- Schemaless Binary: [MessagePack](https://msgpack.org/)
+- Columnar and Big Data: [Apache Parquet](https://parquet.apache.org/)
+- Hierarchical Multidimensional: [HDF5](https://www.hdfgroup.org/solutions/hdf5/)
+- Real-Time Streaming: Native [GraphQL](https://graphql.org/) Subscriptions running over custom RFC 6455 WebSockets
 
 ---
 
