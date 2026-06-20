@@ -39,7 +39,9 @@ func UpgradeToWebSocket(w http.ResponseWriter, r *http.Request) error {
 	bufrw.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
 	bufrw.WriteString("Upgrade: websocket\r\n")
 	bufrw.WriteString("Connection: Upgrade\r\n")
-	bufrw.WriteString("Sec-WebSocket-Accept: " + acceptKey + "\r\n")
+	bufrw.WriteString("Sec-WebSocket-Accept: ")
+	bufrw.WriteString(acceptKey)
+	bufrw.WriteString("\r\n")
 	bufrw.WriteString("\r\n")
 	bufrw.Flush()
 
