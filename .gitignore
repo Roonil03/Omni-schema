@@ -14,3 +14,6 @@ server
 # Design Documents
 Design.md
 *.pdf
+
+# Ignore test files
+*_test.go
