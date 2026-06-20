@@ -50,6 +50,7 @@ This is the core translation execution endpoint. Send a payload utilizing your p
 - `parquet`
 - `msgpack`
 - `capnproto`
+- `hdf5`
 
 #### Request Example (cURL)
 
@@ -67,4 +68,35 @@ curl -X POST http://localhost:8080/morph/json/protobuf \
 
 ```text
 Morphed json to protobuf natively without dependencies. Original payload: 45 bytes.
+```
+
+---
+
+## 3. GraphQL Subscriptions (WebSockets)
+
+The gateway supports fully native, zero-dependency WebSockets for executing continuous GraphQL subscriptions. 
+
+### `GET /graphql/subscriptions`
+
+> [!NOTE]
+> This endpoint requires WebSocket protocol headers.
+
+#### Request Example (cURL WebSocket Emulation)
+
+```bash
+curl -i -N \
+  -H "Connection: Upgrade" \
+  -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: SGVsbG8sIHdvcmxkIQ==" \
+  http://localhost:8080/graphql/subscriptions
+```
+
+#### Response Example
+
+```text
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: <Computed-SHA1-Base64-Hash>
 ```
