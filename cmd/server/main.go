@@ -5,6 +5,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"omni-schema/internal/codec"
+	"omni-schema/internal/lexer"
 )
 
 func main() {
@@ -63,6 +66,25 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// Analysis -> UIR Lowering -> Synthesis
+	if source == "json" && target == "graphql" {
+		node, err := lexer.ParseJSON(body)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error parsing JSON: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		out, err := codec.GenerateGraphQL(node)
+		if err != nil {
+			http.Error(w, "Error synthesizing GraphQL", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/graphql")
+		w.WriteHeader(http.StatusOK)
+		w.Write(out)
+		return
+	}
+
 	responsePayload := fmt.Sprintf("Morphed %s to %s natively without dependencies. Original payload: %d bytes.", source, target, len(body))
 
 	w.WriteHeader(http.StatusOK)

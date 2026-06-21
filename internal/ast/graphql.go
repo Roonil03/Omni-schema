@@ -24,10 +24,10 @@ type GraphQLSelection interface {
 
 // GraphQLField represents a field requested in an operation.
 type GraphQLField struct {
-	Alias        string
-	Name         string
-	Arguments    map[string]any
-	Selections   []GraphQLSelection
+	Alias      string
+	Name       string
+	Arguments  map[string]any
+	Selections []GraphQLSelection
 }
 
 func (GraphQLField) isGraphQLSelection() {}

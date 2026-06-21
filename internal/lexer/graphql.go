@@ -16,7 +16,7 @@ type GraphQLLexer struct {
 func (l *GraphQLLexer) Parse(input string) (*ast.GraphQLDocument, error) {
 	l.scan.Init(strings.NewReader(input))
 	l.scan.Mode = scanner.ScanIdents | scanner.ScanStrings | scanner.ScanInts | scanner.ScanFloats
-	
+
 	doc := &ast.GraphQLDocument{}
 	// Advanced scanning logic for GraphQL tokens will go here.
 	for tok := l.scan.Scan(); tok != scanner.EOF; tok = l.scan.Scan() {
@@ -26,6 +26,6 @@ func (l *GraphQLLexer) Parse(input string) (*ast.GraphQLDocument, error) {
 			doc.Definitions = append(doc.Definitions, op)
 		}
 	}
-	
+
 	return doc, nil
 }
