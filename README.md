@@ -31,24 +31,29 @@ For instructions on operating the gateway, uploading schemas, and mapping struct
 
 ---
 
-## Quick Start
+## Quick Start (Render API)
 
-### Running Natively
-Because the project enforces a zero-dependency rule, it can be compiled and run directly with standard Go commands without the need for external package managers.
+The Omni-Schema Gateway is fully hosted and accessible via Render. You do not need to install Go, Docker, or download the repository to use the live morphing APIs.
 
-```bash
-go run ./cmd/server
-```
+**Base URL**: `https://morph-gateway.onrender.com`
 
-### Running with Docker
-A highly optimized, multi-stage scratch build is provided for containerized environments. The service can be deployed seamlessly via Docker Compose:
+### 1. Morphing Data
+You can instantly morph data by sending a POST request to the translation endpoint:
 
 ```bash
-cd Docker
-docker-compose up --build -d
+curl -X POST https://morph-gateway.onrender.com/morph/json/protobuf \
+  -H "Content-Type: application/json" \
+  -d '{"id": 123, "name": "Test"}'
 ```
 
-The server automatically binds to and listens on port 8080.
+### 2. Uploading Custom Schemas
+If your target protocols require explicit definitions (like Protobuf or GraphQL), upload them using a standard multipart form data request:
+
+```bash
+curl -X POST https://morph-gateway.onrender.com/system/schema \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@my_schema.proto"
+```
 
 ## Architecture Snapshot
 
