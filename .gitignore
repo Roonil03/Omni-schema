@@ -4,8 +4,8 @@
 *.dll
 *.so
 *.dylib
-morph-gateway
-server
+/morph-gateway
+/server
 
 # Test binaries
 *.test
