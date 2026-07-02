@@ -36,21 +36,22 @@ The Omni-Schema Gateway is fully hosted and accessible via Render. You do not ne
 
 **Base URL**: `https://morph-gateway.onrender.com`
 
-### 1. Morphing Data
-You can instantly morph data by sending a POST request to the translation endpoint:
+### 1. Converting a File
+Upload a JSON file and download the converted GraphQL schema:
 
 ```bash
-curl -X POST https://morph-gateway.onrender.com/morph/json/protobuf \
-  -H "Content-Type: application/json" \
-  -d '{"id": 123, "name": "Test"}'
+curl -X POST https://morph-gateway.onrender.com/morph/json/graphql \
+  -F "file=@data.json" \
+  -o converted.graphql
 ```
+
+The server returns a downloadable file with the appropriate `Content-Disposition` header. Use `-o` to save the output directly to disk.
 
 ### 2. Uploading Custom Schemas
 If your target protocols require explicit definitions (like Protobuf or GraphQL), upload them using a standard multipart form data request:
 
 ```bash
 curl -X POST https://morph-gateway.onrender.com/system/schema \
-  -H "Content-Type: multipart/form-data" \
   -F "file=@my_schema.proto"
 ```
 
