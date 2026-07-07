@@ -23,24 +23,31 @@ Upload a source file and receive the converted schema as a downloadable file in 
 | `json` | `hdf5` | `.h5` |
 | `json` | `json` | `.json` |
 
-#### Option A: File Upload (Recommended)
+#### Option A: File Upload with Automatic Filename Preservation (Recommended)
 
-Upload a file using multipart form data. The field name must be `file`.
+Upload a file from your current directory using multipart form data (`-F "file=@egg.json"`). Use `curl -O -J` (`--remote-name --remote-header-name`) so `curl` automatically downloads and saves the converted file directly into your current directory using the base name preserved by the server (e.g., `egg.graphql`).
+
+You can specify the formats in the URL path or directly in the form payload:
 
 ```bash
-curl -X POST https://morph-gateway.onrender.com/morph/json/graphql \
-  -F "file=@data.json" \
-  -o converted.graphql
+# Via URL Path:
+curl -O -J -X POST https://morph-gateway.onrender.com/morph/json/graphql \
+  -F "file=@egg.json"
+
+# Via Form Payload (auto-detects source from file extension):
+curl -O -J -X POST https://morph-gateway.onrender.com/morph \
+  -F "file=@egg.json" \
+  -F "target=graphql"
 ```
 
 #### Option B: Raw Body
 
-Send the payload directly in the request body.
+Send the payload directly in the request body. Since no filename is attached in raw body mode, the server defaults to `converted.{ext}`.
 
 ```bash
 curl -X POST https://morph-gateway.onrender.com/morph/json/graphql \
   -H "Content-Type: application/json" \
-  -d @data.json \
+  -d @egg.json \
   -o converted.graphql
 ```
 
@@ -48,7 +55,7 @@ curl -X POST https://morph-gateway.onrender.com/morph/json/graphql \
 
 The server responds with:
 - `Content-Type`: The appropriate MIME type for the target format.
-- `Content-Disposition`: `attachment; filename="converted.{ext}"` to trigger a file download.
+- `Content-Disposition`: `attachment; filename="{basename}.{ext}"` (e.g. `egg.graphql`), preserving your uploaded file's name to trigger an automatic local download when using `curl -O -J`.
 - The response body contains the raw converted file bytes.
 
 ---

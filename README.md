@@ -36,16 +36,23 @@ The Omni-Schema Gateway is fully hosted and accessible via Render. You do not ne
 
 **Base URL**: `https://morph-gateway.onrender.com`
 
-### 1. Converting a File
-Upload a JSON file and download the converted GraphQL schema:
+### 1. Converting a File (Automatic Filename Preservation)
+Upload a file from your current directory and download the converted schema directly back into the same directory. The server automatically preserves your file's base name (e.g., `egg.json` converts and saves locally as `egg.graphql`).
+
+To let `curl` automatically save the file using the server-provided filename in the current directory, use the `-O -J` (`--remote-name --remote-header-name`) flags:
 
 ```bash
-curl -X POST https://morph-gateway.onrender.com/morph/json/graphql \
-  -F "file=@data.json" \
-  -o converted.graphql
+# Option A: Specify conversion in URL path
+curl -O -J -X POST https://morph-gateway.onrender.com/morph/json/graphql \
+  -F "file=@egg.json"
+
+# Option B: Specify target format directly in the payload/form parameters
+curl -O -J -X POST https://morph-gateway.onrender.com/morph \
+  -F "file=@egg.json" \
+  -F "target=graphql"
 ```
 
-The server returns a downloadable file with the appropriate `Content-Disposition` header. Use `-o` to save the output directly to disk.
+The server detects the source format from your file's extension (`.json`) or form parameters, synthesizes the schema, and returns `Content-Disposition: attachment; filename="egg.graphql"`. Because of `-O -J`, `curl` saves `egg.graphql` right in the folder where the command was called!
 
 ### 2. Uploading Custom Schemas
 If your target protocols require explicit definitions (like Protobuf or GraphQL), upload them using a standard multipart form data request:

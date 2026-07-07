@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"omni-schema/internal/codec"
@@ -42,26 +43,17 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 
 // morphHandler is the primary execution endpoint. Clients upload a file in source
 // format and receive a downloadable file back in the target format.
-// Accepts both multipart file upload (-F "file=@data.json") and raw body (-d '...').
+// Accepts multipart file upload (-F "file=@data.json"), form parameters, query parameters, and raw body.
 func morphHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	path := strings.TrimPrefix(r.URL.Path, "/morph/")
-	parts := strings.Split(path, "/")
-	if len(parts) != 2 {
-		http.Error(w, "Invalid path format. Expected /morph/{source}/{target}", http.StatusBadRequest)
-		return
-	}
-
-	source := parts[0]
-	target := parts[1]
-
 	// Read input: try multipart file upload first, fall back to raw body
 	var body []byte
 	var err error
+	var uploadedFilename string
 
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "multipart/form-data") {
@@ -70,16 +62,41 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Error parsing multipart form", http.StatusBadRequest)
 			return
 		}
-		file, _, fileErr := r.FormFile("file")
-		if fileErr != nil {
-			http.Error(w, "Missing 'file' field in form upload", http.StatusBadRequest)
+		file, header, fileErr := r.FormFile("file")
+		if fileErr == nil {
+			defer file.Close()
+			body, err = io.ReadAll(file)
+			if err != nil {
+				http.Error(w, "Error reading uploaded file", http.StatusInternalServerError)
+				return
+			}
+			if header != nil {
+				uploadedFilename = header.Filename
+			}
+		} else {
+			bodyStr := r.FormValue("payload")
+			if bodyStr == "" {
+				bodyStr = r.FormValue("data")
+			}
+			if bodyStr != "" {
+				body = []byte(bodyStr)
+			} else {
+				http.Error(w, "Missing 'file' field in form upload", http.StatusBadRequest)
+				return
+			}
+		}
+	} else if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
+		err = r.ParseForm()
+		if err != nil {
+			http.Error(w, "Error parsing form", http.StatusBadRequest)
 			return
 		}
-		defer file.Close()
-		body, err = io.ReadAll(file)
-		if err != nil {
-			http.Error(w, "Error reading uploaded file", http.StatusInternalServerError)
-			return
+		bodyStr := r.FormValue("payload")
+		if bodyStr == "" {
+			bodyStr = r.FormValue("data")
+		}
+		if bodyStr != "" {
+			body = []byte(bodyStr)
 		}
 	} else {
 		body, err = io.ReadAll(r.Body)
@@ -92,6 +109,46 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 
 	if len(body) == 0 {
 		http.Error(w, "Empty payload provided", http.StatusBadRequest)
+		return
+	}
+
+	// Resolve source and target from URL path, query parameters, form parameters, or file extension
+	path := strings.TrimPrefix(r.URL.Path, "/morph")
+	path = strings.TrimPrefix(path, "/")
+
+	var source, target string
+	if path != "" {
+		parts := strings.Split(path, "/")
+		if len(parts) >= 2 {
+			source = parts[0]
+			target = parts[1]
+		} else if len(parts) == 1 {
+			target = parts[0]
+		}
+	}
+
+	if source == "" {
+		source = r.URL.Query().Get("source")
+	}
+	if source == "" && (r.MultipartForm != nil || r.Form != nil) {
+		source = r.FormValue("source")
+	}
+	if source == "" && uploadedFilename != "" {
+		ext := filepath.Ext(uploadedFilename)
+		if ext != "" {
+			source = strings.ToLower(strings.TrimPrefix(ext, "."))
+		}
+	}
+
+	if target == "" {
+		target = r.URL.Query().Get("target")
+	}
+	if target == "" && (r.MultipartForm != nil || r.Form != nil) {
+		target = r.FormValue("target")
+	}
+
+	if source == "" || target == "" {
+		http.Error(w, "Invalid path or parameters. Expected /morph/{source}/{target} or form/query parameters for source and target", http.StatusBadRequest)
 		return
 	}
 
@@ -147,7 +204,18 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Determine file extension and content type for the download
 	ext, ctype := targetFileInfo(target)
-	filename := fmt.Sprintf("converted.%s", ext)
+	baseName := "converted"
+	if uploadedFilename != "" {
+		fname := filepath.Base(uploadedFilename)
+		fext := filepath.Ext(fname)
+		if fext != "" {
+			baseName = strings.TrimSuffix(fname, fext)
+		} else if fname != "" && fname != "." && fname != "/" {
+			baseName = fname
+		}
+	}
+	filename := fmt.Sprintf("%s.%s", baseName, ext)
+	filename = strings.ReplaceAll(filename, "\"", "")
 
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
