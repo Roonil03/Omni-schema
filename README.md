@@ -31,29 +31,61 @@ The Omni-Schema Gateway is fully hosted on Render and ready for immediate use. Y
 > [!TIP]
 > **Windows Users**: In PowerShell, `curl` is often an alias for `Invoke-WebRequest`. To use standard cURL flags like `-O -J`, type `curl.exe` instead of `curl`.
 
-### 1. Converting a File (Automatic Filename Preservation)
-Upload any schema or data file from your current directory and download the converted output directly back into the same directory. The server automatically preserves your file's base name (e.g., uploading `data.json` converts and saves locally as `data.graphql`).
+### How to Properly Use the API (Important Rules)
+To ensure seamless file uploads and conversions without client-side or parsing errors, follow these essential guidelines:
+1. **Execute from the Directory Containing Your File**: When passing `-F "file=@filename"`, cURL searches for `filename` inside your **current working directory**. Ensure you `cd` into the folder where your file is located before running the command (otherwise cURL throws error `(26) Failed to open/read local data`).
+2. **Do NOT Override Multipart Headers**: Do **not** manually add `-H "Content-Type: multipart/form-data"` when using `-F`. cURL automatically generates the required multipart boundary parameter (e.g., `boundary=------------------------abcdef1234567890`). Overriding this header strips the boundary parameter, causing backend server parsing failures.
+3. **Use `-O -J` for Automatic Local Downloads**: Adding `-O -J` (`--remote-name --remote-header-name`) tells cURL to read the server's `Content-Disposition` header and automatically download and save the converted file directly into your calling folder with its base name preserved (e.g., uploading `data.json` converts and saves locally as `data.graphql`).
 
-To let `curl` automatically save the file using the server-provided filename in your current directory, use the `-O -J` (`--remote-name --remote-header-name`) flags:
+---
+
+### Complete Terminal Walkthrough (Example as `user1@user`)
+
+Here is an end-to-end example demonstrating how a developer (`user1@user`) creates a file in their terminal, converts it via the live Render API, and receives the translated schema directly in their working directory:
 
 ```bash
-# Option A: Specify conversion in URL path (/morph/{source}/{target})
-curl -O -J -X POST https://morph-gateway.onrender.com/morph/json/graphql \
+# Step 1: Check your current working directory and create a sample JSON payload
+user1@user:~$ pwd
+/home/user1
+user1@user:~$ echo '{"id": 101, "name": "Alice", "role": "admin", "active": true}' > data.json
+
+# Step 2: Upload data.json to convert it to GraphQL (using -O -J)
+# Notice we do NOT add -H "Content-Type: multipart/form-data"!
+user1@user:~$ curl -O -J -X POST https://morph-gateway.onrender.com/morph/json/graphql \
   -F "file=@data.json"
 
-# Option B: Specify target format in form parameters (auto-detects source from .json extension)
-curl -O -J -X POST https://morph-gateway.onrender.com/morph \
-  -F "file=@data.json" \
-  -F "target=graphql"
+# Step 3: Check your directory: data.graphql was automatically downloaded and saved!
+user1@user:~$ ls -l
+total 8
+-rw-r--r-- 1 user1 user 64 Jul  8 12:30 data.graphql
+-rw-r--r-- 1 user1 user 65 Jul  8 12:30 data.json
+
+# Step 4: View the converted GraphQL schema
+user1@user:~$ cat data.graphql
+type Root {
+  id: Float!
+  name: String!
+  role: String!
+  active: Boolean!
+}
 ```
 
-The server detects the source format from your file's extension or parameters, synthesizes the target format, and returns `Content-Disposition: attachment; filename="data.graphql"`. Because of `-O -J`, `curl` saves `data.graphql` right in the folder where the command was executed!
-
-### 2. Uploading Custom Schemas
-If your target protocols require explicit structural definitions (such as custom Protobuf `.proto` or GraphQL `.graphql` schemas), upload them using a standard multipart form request:
+#### Alternative Routing: Form Parameters
+You can also specify the target format via form parameters instead of the URL path. If the source format is omitted, the server automatically detects it from your file's extension (`.json` -> `json`):
 
 ```bash
-curl -X POST https://morph-gateway.onrender.com/system/schema \
+user1@user:~$ curl -O -J -X POST https://morph-gateway.onrender.com/morph \
+  -F "file=@data.json" \
+  -F "target=protobuf"
+```
+
+---
+
+### Uploading Custom Schemas
+If your target protocols require explicit structural definitions (such as custom Protobuf `.proto` or Cap'n Proto `.capnp` schemas), upload them to the system registry using a standard multipart form request:
+
+```bash
+user1@user:~$ curl -X POST https://morph-gateway.onrender.com/system/schema \
   -F "file=@custom_schema.proto"
 ```
 
@@ -84,7 +116,7 @@ For developers and contributors wishing to run or extend Omni-Schema locally, th
 3. Test your local instance:
    ```bash
    curl -O -J -X POST http://localhost:8080/morph/json/graphql \
-     -F "file=@testing_files/sample_payload.json"
+     -F "file=@data.json"
    ```
 
 ### Running with Docker
