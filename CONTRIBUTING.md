@@ -2,8 +2,6 @@
 
 Thank you for your interest in contributing to the **Omni-Schema Gateway**! We welcome bug reports, documentation improvements, architectural suggestions, and code contributions from the open-source community.
 
-This project is maintained by [Roonil03](https://github.com/Roonil03) and tested by [Ishaan Vatus](https://github.com/ishaanvatus). By participating in this project, you agree to abide by standard open-source code of conduct guidelines and maintain a professional, collaborative environment.
-
 ---
 
 ## 1. Core Architectural Constraints

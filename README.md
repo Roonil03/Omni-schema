@@ -133,7 +133,6 @@ docker run -p 8080:8080 -e PORT=8080 omni-schema
 For detailed API specifications, supported format matrices, WebSocket subscription protocols, and error code references, consult the official documentation:
 
 - **[API Documentation](./API_DOCUMENTATION.md)**: Full endpoint reference and usage guide.
-- **[Design Document](./Design.md)**: Architectural breakdown of the Analysis-Synthesis engine and UIR graph.
 - **[Credits](./Credits.md)**: Acknowledgments and roles of the engineering team members who contributed to this project.
 
 ### Architecture Snapshot
