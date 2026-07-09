@@ -134,6 +134,7 @@ For detailed API specifications, supported format matrices, WebSocket subscripti
 
 - **[API Documentation](./API_DOCUMENTATION.md)**: Full endpoint reference and usage guide.
 - **[Design Document](./Design.md)**: Architectural breakdown of the Analysis-Synthesis engine and UIR graph.
+- **[Credits](./Credits.md)**: Acknowledgments and roles of the engineering team members who contributed to this project.
 
 ### Architecture Snapshot
 - **Lexers & ASTs**: Constructed natively utilizing `text/scanner` without third-party parsing libraries.
