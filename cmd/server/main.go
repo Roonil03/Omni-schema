@@ -223,6 +223,18 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		switch target {
 		case "graphql":
 			synthesize = func() ([]byte, error) { return codec.GenerateGraphQL(outputNode) }
+		case "protobuf":
+			synthesize = func() ([]byte, error) { return codec.GenerateProtobuf(outputNode) }
+		case "msgpack":
+			synthesize = func() ([]byte, error) { return codec.GenerateMessagePack(outputNode) }
+		case "parquet":
+			synthesize = func() ([]byte, error) { return codec.GenerateParquet(outputNode) }
+		case "capnproto":
+			synthesize = func() ([]byte, error) { return codec.GenerateCapnProto(outputNode) }
+		case "hdf5":
+			synthesize = func() ([]byte, error) { return codec.GenerateHDF5(outputNode) }
+		case "json":
+			synthesize = func() ([]byte, error) { return codec.GenerateJSON(outputNode) }
 		default:
 			http.Error(w, fmt.Sprintf("Unsupported target format: %s", target), 400)
 			return
@@ -262,6 +274,18 @@ func targetFileInfo(target string) (ext string, contentType string) {
 	switch target {
 	case "graphql":
 		return "graphql", "application/graphql"
+	case "protobuf":
+		return "pb", "application/protobuf"
+	case "msgpack":
+		return "msgpack", "application/msgpack"
+	case "parquet":
+		return "parquet", "application/parquet"
+	case "capnproto":
+		return "capnp", "application/capnproto"
+	case "hdf5":
+		return "h5", "application/x-hdf5"
+	case "json":
+		return "json", "application/json"
 	default:
 		return "bin", "application/octet-stream"
 	}
