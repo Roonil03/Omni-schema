@@ -15,6 +15,7 @@ import (
 	"omni-schema/internal/network"
 	"omni-schema/internal/registry"
 	"omni-schema/internal/stream"
+	"omni-schema/internal/uir"
 )
 
 func main() {
@@ -61,7 +62,7 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(header.Filename), "."))
-	var rootNode interface{}
+	var rootNode *uir.Node
 
 	// Phase 1: Parse and Lower to UIR
 	if ext == "graphql" || ext == "gql" {

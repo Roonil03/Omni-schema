@@ -87,35 +87,46 @@ On a successful morphing request (`200 OK`), the server returns:
 
 ## 2. Custom Schema Ingestion
 
-Before morphing complex binary protocols that require strict pre-defined schemas (such as Cap'n Proto or Protobuf), upload your structural definitions to the system registry.
+Before morphing complex binary protocols that require strict pre-defined schemas (such as Cap'n Proto or Protobuf), upload your structural definitions to the system registry. The registry automatically hashes schemas for version control.
 
 ### `POST /system/schema`
 
 Upload `.proto`, `.capnp`, or `.graphql` schema files using a standard multipart form request:
 
 ```bash
-curl -X POST https://morph-gateway.onrender.com/system/schema \
+curl -X POST http://localhost:8080/system/schema \
+  -F "name=transaction" \
   -F "file=@custom_schema.proto"
+```
+**Success Response (`200 OK`)**:
+```json
+{
+  "status": "registered",
+  "name": "transaction",
+  "version": "76dd4e9f",
+  "format": "proto"
+}
+```
+
+Once registered, you can explicitly request this schema during a morph via the `?schema=` query parameter:
+```bash
+curl -X POST "http://localhost:8080/morph/json/graphql?schema=transaction" -F "file=@data.json"
 ```
 
 ---
 
 ## 3. Real-Time GraphQL Subscriptions (WebSockets)
 
-The gateway supports fully native, zero-dependency WebSockets for executing continuous GraphQL streaming subscriptions over TCP hijacking.
+The gateway supports fully native, zero-dependency WebSockets (RFC 6455) for executing continuous GraphQL streaming subscriptions over TCP hijacking. It includes a complete frame-level masking and binary parsing engine.
 
 ### `GET /graphql/subscriptions`
 
-This endpoint requires standard RFC 6455 WebSocket protocol upgrade headers:
+This endpoint accepts standard WebSocket connections. You can bind to a registered schema by passing `?schema=name` in the URL.
 
-```bash
-curl --http1.1 -i -N \
-  -H "Connection: Upgrade" \
-  -H "Upgrade: websocket" \
-  -H "Sec-WebSocket-Version: 13" \
-  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-  https://morph-gateway.onrender.com/graphql/subscriptions
-```
+The protocol expects JSON text frames:
+1. **Init**: Client sends `{"type":"connection_init"}`. Server replies with `{"type":"connection_ack"}`.
+2. **Subscribe**: Client sends `{"id":"sub_1", "type":"subscribe", "payload":{"query":"..."}}`.
+3. **Events**: Server pushes real-time events triggered by the `POST /dev/events` broker endpoint.
 
 ---
 

@@ -147,7 +147,3 @@ func (l *GraphQLLexer) parseOperationDefinition(opType string) (*ast.GraphQLOper
 	return op, nil
 }
 
-// ParseJSON takes a raw []byte and builds an AST (stubbed for now as we focus on schema)
-func ParseJSON(data []byte) (*ast.GraphQLDocument, error) {
-	return nil, nil // JSON morph handled dynamically usually via map[string]any
-}

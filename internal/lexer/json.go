@@ -14,7 +14,7 @@ func ParseJSON(data []byte) (*uir.Node, error) {
 		return nil, err
 	}
 
-	root := uir.NewNode(uir.TypeMap, "json_root", nil)
+	root := uir.NewNode(uir.TypeMap, "Root", nil)
 	mapToUIR(root, payload)
 	
 	return root, nil
