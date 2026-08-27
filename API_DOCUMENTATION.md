@@ -87,7 +87,10 @@ On a successful morphing request (`200 OK`), the server returns:
 
 ## 2. Custom Schema Ingestion
 
-Before morphing complex binary protocols that require strict pre-defined schemas (such as Cap'n Proto or Protobuf), upload your structural definitions to the system registry. The registry automatically hashes schemas for version control.
+Before morphing complex binary protocols that require strict pre-defined schemas (such as Cap'n Proto or Protobuf), upload your structural definitions to the system registry. The registry automatically hashes schemas for version control. 
+
+> [!NOTE]
+> In local development or self-hosted environments, the registry state is automatically persisted to `registry_store.json` in the current working directory to ensure your uploaded schemas survive server restarts.
 
 ### `POST /system/schema`
 

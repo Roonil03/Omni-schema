@@ -6,6 +6,7 @@
 *.dylib
 /morph-gateway
 /server
+registry_store.json
 
 # Test binaries
 *.test
