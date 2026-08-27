@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"omni-schema/internal/ast"
 	"omni-schema/internal/codec"
 	"omni-schema/internal/lexer"
 	"omni-schema/internal/lower"
@@ -335,28 +336,38 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 					subID = "1"
 				}
 
+				var requestedFields []ast.GraphQLSelection
+				
+				payloadObj, ok := msg["payload"].(map[string]any)
+				if ok {
+					query, _ := payloadObj["query"].(string)
+					if query != "" {
+						l := &lexer.GraphQLLexer{}
+						doc, err := l.Parse(query)
+						if err == nil && len(doc.Definitions) > 0 {
+							if op, ok := doc.Definitions[0].(*ast.GraphQLOperation); ok {
+								requestedFields = op.Selections
+							}
+						}
+					}
+				}
+
 				sub := &stream.Subscription{
-					ID:            subID,
-					Conn:          conn,
-					SchemaName:    schemaParam,
-					SchemaVersion: schemaVersion,
-					Closed:        make(chan struct{}),
+					ID:              subID,
+					Conn:            conn,
+					SchemaName:      schemaParam,
+					SchemaVersion:   schemaVersion,
+					RequestedFields: requestedFields,
+					Closed:          make(chan struct{}),
 				}
 				
 				stream.DefaultBroker.AddSubscription(sub)
 				
-				// Handle cleanup when connection breaks
-				go func() {
-					for {
-						op, _, err := conn.ReadMessage()
-						if err != nil || op == network.OpClose {
-							stream.DefaultBroker.RemoveSubscription(sub)
-							return
-						}
-					}
-				}()
-				
-				return // Transfer ownership to the goroutine
+				// Stay in the same loop (Single Reader Goroutine)
+				// Clean up on loop exit
+				defer stream.DefaultBroker.RemoveSubscription(sub)
+			} else if msgType == "complete" {
+				return // Client finished, loop exits, defer cleans up
 			}
 		}
 	}

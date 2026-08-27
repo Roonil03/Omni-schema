@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 )
 
 // Opcode defines WebSocket frame types.
@@ -23,10 +24,10 @@ const (
 	OpPong         Opcode = 0xA
 )
 
-// Conn represents a WebSocket connection.
 type Conn struct {
 	netConn net.Conn
 	rw      *bufio.ReadWriter
+	wmu     sync.Mutex
 }
 
 // UpgradeToWebSocket manually negotiates the RFC 6455 WebSocket handshake.
@@ -166,9 +167,11 @@ func (c *Conn) ReadMessage() (Opcode, []byte, error) {
 	}
 }
 
-// WriteMessage writes a WebSocket frame. Server-to-client frames are unmasked
-// per RFC 6455 §5.1.
+// WriteMessage sends a WebSocket frame with the given opcode and payload.
 func (c *Conn) WriteMessage(opcode Opcode, payload []byte) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+
 	var header []byte
 	header = append(header, 0x80|byte(opcode)) // FIN bit set
 

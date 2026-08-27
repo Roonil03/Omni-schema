@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"omni-schema/internal/ast"
 	"omni-schema/internal/codec"
 	"omni-schema/internal/lexer"
 	"omni-schema/internal/network"
@@ -22,13 +23,13 @@ type Broker struct {
 	subscriptions map[*Subscription]bool
 }
 
-// Subscription represents an active client stream.
 type Subscription struct {
-	ID            string
-	Conn          *network.Conn
-	SchemaName    string
-	SchemaVersion string
-	Closed        chan struct{}
+	ID              string
+	Conn            *network.Conn
+	SchemaName      string
+	SchemaVersion   string
+	RequestedFields []ast.GraphQLSelection
+	Closed          chan struct{}
 }
 
 // DefaultBroker is the global event broker.
@@ -156,6 +157,11 @@ func (b *Broker) projectEvent(sub *Subscription, eventType string, data any) (an
 	}
 
 	projected := uir.Project(eventRoot, schemaTarget)
+
+	// Step 3.5: If the client requested specific fields, filter the projected result.
+	if len(sub.RequestedFields) > 0 {
+		projected = filterBySelection(projected, sub.RequestedFields)
+	}
 
 	// Step 4: Generate GraphQL SDL from the projected UIR.
 	graphqlBytes, err := codec.GenerateGraphQL(projected)

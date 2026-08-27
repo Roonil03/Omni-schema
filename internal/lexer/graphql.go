@@ -124,26 +124,44 @@ func (l *GraphQLLexer) parseOperationDefinition(opType string) (*ast.GraphQLOper
 		l.next()
 	}
 
-	if l.scan.TokenText() != "{" {
-		return nil, fmt.Errorf("expected '{' for operation %s", op.OperationType)
+	selections, err := l.parseSelectionSet()
+	if err != nil {
+		return nil, err
 	}
-	
-	// Skip over operation contents for now as we mainly parse schemas
-	depth := 0
-	for l.tok != scanner.EOF {
-		text := l.scan.TokenText()
-		if text == "{" {
-			depth++
-		} else if text == "}" {
-			depth--
-			if depth == 0 {
-				l.next()
-				break
-			}
-		}
-		l.next()
-	}
+	op.Selections = selections
 
 	return op, nil
+}
+
+func (l *GraphQLLexer) parseSelectionSet() ([]ast.GraphQLSelection, error) {
+	var selections []ast.GraphQLSelection
+	l.next() // consume '{'
+
+	for l.tok != scanner.EOF && l.scan.TokenText() != "}" {
+		if l.tok != scanner.Ident {
+			return nil, fmt.Errorf("expected field name in selection set, got %s", l.scan.TokenText())
+		}
+		
+		field := &ast.GraphQLField{Name: l.scan.TokenText()}
+		l.next() // consume field name
+
+		// Check for sub-selections
+		if l.scan.TokenText() == "{" {
+			subSelections, err := l.parseSelectionSet()
+			if err != nil {
+				return nil, err
+			}
+			field.Selections = subSelections
+		}
+		
+		selections = append(selections, field)
+	}
+
+	if l.scan.TokenText() != "}" {
+		return nil, fmt.Errorf("expected '}' at end of selection set")
+	}
+	l.next() // consume '}'
+
+	return selections, nil
 }
 
