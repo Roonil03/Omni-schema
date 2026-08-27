@@ -31,7 +31,7 @@ Upload a source file or raw data stream and receive the synthesized output as a 
 | Source Format | Target Format | Output Extension | MIME Content-Type |
 | :--- | :--- | :--- | :--- |
 | `json` | `graphql` | `.graphql` | `application/graphql` |
-| `json` | `protobuf` | `.pb` | `application/protobuf` *(Experimental)* |
+| `json` | `protobuf` | `.pb` | `application/protobuf` |
 | `json` | `msgpack` | `.msgpack` | `application/msgpack` |
 | `json` | `parquet` | `.parquet` | `application/parquet` *(Experimental)* |
 | `json` | `capnproto` | `.capnp` | `application/capnproto` *(Experimental)* |

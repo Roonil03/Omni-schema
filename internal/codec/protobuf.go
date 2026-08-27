@@ -1,11 +1,15 @@
 package codec
 
 import (
+	"encoding/binary"
+	"fmt"
+	"math"
+	"unicode/utf8"
+
 	"omni-schema/internal/uir"
 )
 
-// GenerateProtobuf encodes a UIR Node graph into a binary Protobuf byte stream manually,
-// parsing out varints, 32-bit/64-bit wire types, and length-delimited records.
+// GenerateProtobuf encodes a UIR Node graph into a binary Protobuf byte stream manually.
 func GenerateProtobuf(n *uir.Node) ([]byte, error) {
 	if n == nil {
 		return nil, nil
@@ -31,7 +35,13 @@ func encodeProtoField(tag uint64, n *uir.Node) ([]byte, error) {
 	switch n.Type {
 	case uir.TypeInt32, uir.TypeInt64:
 		// wire type 0 (varint)
-		val := uint64(n.Value.(int64))
+		var val uint64
+		switch v := n.Value.(type) {
+		case int64: val = uint64(v)
+		case int32: val = uint64(v)
+		case int: val = uint64(v)
+		case uint64: val = v
+		}
 		buf = append(buf, encodeVarint(tag<<3)...)
 		buf = append(buf, encodeVarint(val)...)
 	case uir.TypeString:
@@ -48,6 +58,14 @@ func encodeProtoField(tag uint64, n *uir.Node) ([]byte, error) {
 		}
 		buf = append(buf, encodeVarint(tag<<3)...)
 		buf = append(buf, encodeVarint(val)...)
+	case uir.TypeFloat64:
+		// wire type 1 (64-bit)
+		val := n.Value.(float64)
+		bits := math.Float64bits(val)
+		buf = append(buf, encodeVarint((tag<<3)|1)...)
+		var b [8]byte
+		binary.LittleEndian.PutUint64(b[:], bits)
+		buf = append(buf, b[:]...)
 	case uir.TypeMap:
 		// wire type 2 (length-delimited embedded message)
 		msg, err := GenerateProtobuf(n)
@@ -71,13 +89,92 @@ func encodeVarint(v uint64) []byte {
 	return buf
 }
 
-// ParseProtobuf is a minimal protobuf decoder that blindly parses length-delimited strings
-// and varints into a generic map structure without a schema (which uir.Project will fix later).
+// ParseProtobuf decodes protobuf wire format without a schema into a UIR Node graph.
 func ParseProtobuf(data []byte) (*uir.Node, error) {
 	root := uir.NewNode(uir.TypeMap, "Root", nil)
-	// We lack full schema decoding, so this is a placeholder implementation that treats
-	// everything as raw bytes unless it parses cleanly as strings or varints.
-	// For Phase 4 (Subset), we just return an empty map and let projection drop everything,
-	// or we mock a simple parse loop.
-	return root, nil
+	err := parseProtobufMessage(data, root)
+	return root, err
+}
+
+func parseProtobufMessage(data []byte, parent *uir.Node) error {
+	for len(data) > 0 {
+		tagAndWire, n, err := decodeVarint(data)
+		if err != nil {
+			return err
+		}
+		data = data[n:]
+		tag := tagAndWire >> 3
+		wireType := tagAndWire & 7
+
+		key := fmt.Sprintf("%d", tag)
+
+		switch wireType {
+		case 0: // Varint
+			val, n, err := decodeVarint(data)
+			if err != nil {
+				return err
+			}
+			data = data[n:]
+			parent.AddChild(uir.NewNode(uir.TypeInt64, key, int64(val)))
+		case 1: // 64-bit
+			if len(data) < 8 {
+				return fmt.Errorf("unexpected EOF reading 64-bit wire type")
+			}
+			bits := binary.LittleEndian.Uint64(data[:8])
+			data = data[8:]
+			val := math.Float64frombits(bits)
+			parent.AddChild(uir.NewNode(uir.TypeFloat64, key, val))
+		case 2: // Length-delimited
+			l, n, err := decodeVarint(data)
+			if err != nil {
+				return err
+			}
+			data = data[n:]
+			if len(data) < int(l) {
+				return fmt.Errorf("unexpected EOF reading length-delimited wire type")
+			}
+			chunk := data[:l]
+			data = data[l:]
+
+			// Attempt recursive parse for nested messages
+			msgNode := uir.NewNode(uir.TypeMap, key, nil)
+			err = parseProtobufMessage(chunk, msgNode)
+			if err == nil && len(msgNode.Children) > 0 {
+				parent.AddChild(msgNode)
+			} else {
+				// Fallback to string if valid utf8, else just treat as string
+				if utf8.Valid(chunk) {
+					parent.AddChild(uir.NewNode(uir.TypeString, key, string(chunk)))
+				} else {
+					parent.AddChild(uir.NewNode(uir.TypeString, key, fmt.Sprintf("base64:%x", chunk)))
+				}
+			}
+		case 5: // 32-bit
+			if len(data) < 4 {
+				return fmt.Errorf("unexpected EOF reading 32-bit wire type")
+			}
+			bits := binary.LittleEndian.Uint32(data[:4])
+			data = data[4:]
+			parent.AddChild(uir.NewNode(uir.TypeInt32, key, int32(bits)))
+		default:
+			return fmt.Errorf("unsupported wire type: %d", wireType)
+		}
+	}
+	return nil
+}
+
+func decodeVarint(data []byte) (uint64, int, error) {
+	var v uint64
+	var shift uint
+	for i, b := range data {
+		if b < 0x80 {
+			if i > 9 || i == 9 && b > 1 {
+				return 0, 0, fmt.Errorf("varint overflow")
+			}
+			return v | uint64(b)<<shift, i + 1, nil
+		}
+		v |= uint64(b&0x7f) << shift
+		shift += 7
+	}
+	return 0, 0, fmt.Errorf("unexpected EOF reading varint")
 }
