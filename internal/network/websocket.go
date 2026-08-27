@@ -66,8 +66,16 @@ func UpgradeToWebSocket(w http.ResponseWriter, r *http.Request) (*Conn, error) {
 	return &Conn{netConn: conn, rw: bufrw}, nil
 }
 
-// ReadMessage reads a complete message from the WebSocket.
+// ReadMessage reads a complete WebSocket message, correctly assembling fragmented
+// messages per RFC 6455 §5.4. Control frames (ping, pong, close) that arrive between
+// data fragments are handled inline without disrupting the assembly buffer.
 func (c *Conn) ReadMessage() (Opcode, []byte, error) {
+	var (
+		messageOpcode Opcode // The opcode from the first frame of the current message.
+		messageBuf    []byte // Accumulation buffer for fragmented payloads.
+		assembling    bool   // True when we are mid-fragmentation.
+	)
+
 	for {
 		header := make([]byte, 2)
 		_, err := io.ReadFull(c.rw, header)
@@ -113,27 +121,53 @@ func (c *Conn) ReadMessage() (Opcode, []byte, error) {
 			}
 		}
 
-		switch opcode {
-		case OpPing:
-			c.WriteMessage(OpPong, payload)
+		// RFC 6455 §5.5: Control frames (opcodes >= 0x8) may be injected between
+		// data fragments and must be handled immediately.
+		if opcode >= 0x8 {
+			switch opcode {
+			case OpPing:
+				c.WriteMessage(OpPong, payload)
+			case OpPong:
+				// No action required.
+			case OpClose:
+				c.Close()
+				return OpClose, payload, io.EOF
+			}
 			continue
-		case OpPong:
-			continue
-		case OpClose:
-			c.Close()
-			return OpClose, payload, io.EOF
 		}
 
-		if fin {
-			return opcode, payload, nil
+		// Data frame handling with fragmentation assembly.
+		if !assembling {
+			// This is the first frame of a new message.
+			if fin {
+				// Single-frame, unfragmented message — fast path.
+				return opcode, payload, nil
+			}
+			// First frame of a fragmented message (FIN=0, opcode != 0).
+			messageOpcode = opcode
+			messageBuf = append(messageBuf[:0], payload...)
+			assembling = true
+		} else {
+			// We are mid-fragmentation. Per RFC 6455 §5.4, continuation frames
+			// must have opcode 0x0 and the final fragment has FIN=1.
+			if opcode != OpContinuation {
+				return 0, nil, errors.New("expected continuation frame (opcode 0x0) during fragmented message")
+			}
+			messageBuf = append(messageBuf, payload...)
+			if fin {
+				// Final fragment received — return the assembled message.
+				assembling = false
+				result := make([]byte, len(messageBuf))
+				copy(result, messageBuf)
+				messageBuf = messageBuf[:0]
+				return messageOpcode, result, nil
+			}
 		}
-		// In a full implementation, we'd buffer continuation frames.
-		// For our simple GraphQL streaming, we expect single-frame messages.
-		return opcode, payload, nil
 	}
 }
 
-// WriteMessage writes a WebSocket frame.
+// WriteMessage writes a WebSocket frame. Server-to-client frames are unmasked
+// per RFC 6455 §5.1.
 func (c *Conn) WriteMessage(opcode Opcode, payload []byte) error {
 	var header []byte
 	header = append(header, 0x80|byte(opcode)) // FIN bit set
