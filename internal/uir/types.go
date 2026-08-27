@@ -17,6 +17,8 @@ const (
 	TypeBoolean         // UIR_Boolean: OpenAPI boolean, GraphQL Boolean, Protobuf bool, OData Edm.Boolean, Avro boolean
 	TypeArray           // UIR_Array[T]: OpenAPI array, GraphQL [T], Protobuf repeated_T, OData Collection(T), Avro array
 	TypeMap             // UIR_Map[K,V]: OpenAPI object, GraphQL List_of_Pairs, Protobuf map<K,V>, OData Open_Type, Avro map
+	TypeDefinition      // UIR_Definition: Represents a named type declaration (e.g. GraphQL type User, Protobuf message User)
+	TypeRef             // UIR_Ref: Represents a reference to a named type
 )
 
 func (t UIRType) String() string {
@@ -43,6 +45,10 @@ func (t UIRType) String() string {
 		return "UIR_Array"
 	case TypeMap:
 		return "UIR_Map"
+	case TypeDefinition:
+		return "UIR_Definition"
+	case TypeRef:
+		return "UIR_Ref"
 	default:
 		return "UIR_Unknown"
 	}

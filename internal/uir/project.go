@@ -13,9 +13,18 @@ const (
 	UnknownFieldPreserve
 )
 
+type LossinessPolicy int
+
+const (
+	LossyStrict LossinessPolicy = iota // No precision loss, no overflow allowed
+	LossySafe                          // Allows safe coercions (e.g. Int32 to Int64)
+	LossyPermissive                    // Force coercion even if precision is lost (e.g. float 12.9 -> int 12)
+)
+
 type ProjectOptions struct {
 	UnknownFields      UnknownFieldPolicy
 	EmitNullForMissing bool
+	Lossiness          LossinessPolicy
 }
 
 // Project takes a data UIR graph and a schema UIR graph and returns a new UIR graph
@@ -40,7 +49,7 @@ func projectNode(data *Node, schema *Node, typeName string, opt ProjectOptions) 
 
 	if schema.Type != TypeMap || len(schema.Children) == 0 {
 		// Leaf or scalar node: use schema type, data value.
-		val, err := coerceValue(data, schema.Type)
+		val, err := coerceValue(data, schema.Type, opt.Lossiness)
 		if err != nil {
 			return nil, fmt.Errorf("field '%s': %w", schema.Key, err)
 		}
@@ -71,7 +80,7 @@ func projectNode(data *Node, schema *Node, typeName string, opt ProjectOptions) 
 			if defVal, ok := schemaField.TypeAnnotations["default"]; ok {
 				// Parse default string into correct UIR type simply
 				defNode := NewNode(TypeString, schemaField.Key, defVal)
-				val, _ := coerceValue(defNode, schemaField.Type)
+				val, _ := coerceValue(defNode, schemaField.Type, LossySafe)
 				n := NewNode(schemaField.Type, schemaField.Key, val)
 				projected.AddChild(n)
 			} else if schemaField.TypeAnnotations["nonNull"] == "true" {
@@ -108,7 +117,7 @@ func projectNode(data *Node, schema *Node, typeName string, opt ProjectOptions) 
 						}
 						arrayNode.AddChild(projElem)
 					} else {
-						val, err := coerceValue(elem, schemaField.ElementType)
+						val, err := coerceValue(elem, schemaField.ElementType, opt.Lossiness)
 						if err != nil {
 							return nil, fmt.Errorf("array element '%s': %w", schemaField.Key, err)
 						}
@@ -120,7 +129,7 @@ func projectNode(data *Node, schema *Node, typeName string, opt ProjectOptions) 
 			projected.AddChild(arrayNode)
 		} else {
 			// Scalar field: use schema type, data value.
-			val, err := coerceValue(dataChild, schemaField.Type)
+			val, err := coerceValue(dataChild, schemaField.Type, opt.Lossiness)
 			if err != nil {
 				return nil, fmt.Errorf("field '%s': %w", schemaField.Key, err)
 			}
@@ -147,9 +156,9 @@ func projectNode(data *Node, schema *Node, typeName string, opt ProjectOptions) 
 	return projected, nil
 }
 
-// coerceValue extracts the value from a data node and performs strict type coercion
-// to match the target UIR type, avoiding silent precision loss or overflows.
-func coerceValue(data *Node, targetType UIRType) (any, error) {
+// coerceValue extracts the value from a data node and performs type coercion
+// based on the LossinessPolicy.
+func coerceValue(data *Node, targetType UIRType, lossiness LossinessPolicy) (any, error) {
 	if data == nil || data.Value == nil {
 		return zeroForType(targetType), nil
 	}
@@ -159,12 +168,11 @@ func coerceValue(data *Node, targetType UIRType) (any, error) {
 	switch targetType {
 	case TypeInt32, TypeInt64:
 		if f, ok := val.(float64); ok {
-			// Check for fractional loss
-			if f != math.Trunc(f) {
+			if lossiness == LossyStrict && f != math.Trunc(f) {
 				return nil, fmt.Errorf("cannot safely coerce float %v to int: precision loss", f)
 			}
 			// Check bounds for int64
-			if f > math.MaxInt64 || f < math.MinInt64 {
+			if lossiness == LossyStrict && (f > math.MaxInt64 || f < math.MinInt64) {
 				return nil, fmt.Errorf("cannot safely coerce float %v to int: integer overflow", f)
 			}
 			if targetType == TypeInt32 {
@@ -178,10 +186,10 @@ func coerceValue(data *Node, targetType UIRType) (any, error) {
 			return i, nil
 		}
 		if u, ok := val.(uint64); ok {
-			if targetType == TypeInt32 && u > math.MaxInt32 {
+			if lossiness != LossyPermissive && targetType == TypeInt32 && u > math.MaxInt32 {
 				return nil, fmt.Errorf("cannot safely coerce uint64 to int32: overflow")
 			}
-			if u > math.MaxInt64 {
+			if lossiness != LossyPermissive && u > math.MaxInt64 {
 				return nil, fmt.Errorf("cannot safely coerce uint64 to int64: overflow")
 			}
 			return int64(u), nil
@@ -189,10 +197,10 @@ func coerceValue(data *Node, targetType UIRType) (any, error) {
 		return val, nil
 	case TypeUInt32, TypeUInt64:
 		if f, ok := val.(float64); ok {
-			if f < 0 || f != math.Trunc(f) || f > math.MaxUint64 {
+			if lossiness != LossyPermissive && (f < 0 || f != math.Trunc(f) || f > math.MaxUint64) {
 				return nil, fmt.Errorf("cannot safely coerce float %v to uint", f)
 			}
-			if targetType == TypeUInt32 && f > math.MaxUint32 {
+			if lossiness != LossyPermissive && targetType == TypeUInt32 && f > math.MaxUint32 {
 				return nil, fmt.Errorf("cannot safely coerce float %v to uint32", f)
 			}
 			return uint64(f), nil
@@ -201,7 +209,7 @@ func coerceValue(data *Node, targetType UIRType) (any, error) {
 			return u, nil
 		}
 		if i, ok := val.(int64); ok {
-			if i < 0 {
+			if lossiness != LossyPermissive && i < 0 {
 				return nil, fmt.Errorf("cannot safely coerce negative int to uint")
 			}
 			return uint64(i), nil
