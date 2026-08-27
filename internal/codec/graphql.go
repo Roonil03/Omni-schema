@@ -9,128 +9,175 @@ import (
 	"omni-schema/internal/uir"
 )
 
-// GenerateGraphQL takes a UIR Node graph and synthesizes valid GraphQL SDL.
+// GenerateGraphQL takes a UIR Node graph and synthesizes valid, flat GraphQL SDL.
+// Every nested object becomes a separate named type definition. Type names are derived
+// from schema annotations when available, or synthesized deterministically from the
+// parent-child path when processing untyped data (e.g. JSON inference).
 func GenerateGraphQL(n *uir.Node) ([]byte, error) {
 	var builder strings.Builder
-	
-	// Collect all distinct types to ensure flat definitions
-	typeDefs := make(map[string]*uir.Node)
-	collectTypes(n, typeDefs)
 
-	// Sort type names for determinism
+	// Collect all distinct type definitions into a flat map.
+	typeDefs := make(map[string]*uir.Node)
+	collectTypes(n, typeDefs, "")
+
+	// Sort type names for deterministic output.
 	var names []string
 	for name := range typeDefs {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
-	// Always ensure Root is at the top if it exists
+	// Emit root-level types first (Root, or schema doc roots), then the rest.
+	var rootNames, otherNames []string
 	for _, name := range names {
-		if name == "Root" || name == "graphql_root" || name == "proto_root" {
-			writeGraphQLTypeDefinition(&builder, name, typeDefs[name])
+		if name == "Root" || strings.HasSuffix(name, "_root") {
+			rootNames = append(rootNames, name)
+		} else {
+			otherNames = append(otherNames, name)
 		}
 	}
-	for _, name := range names {
-		if name != "Root" && name != "graphql_root" && name != "proto_root" {
-			writeGraphQLTypeDefinition(&builder, name, typeDefs[name])
-		}
+	ordered := append(rootNames, otherNames...)
+
+	for _, name := range ordered {
+		writeGraphQLTypeDefinition(&builder, name, typeDefs[name], typeDefs)
 	}
 
 	return []byte(builder.String()), nil
 }
 
-func collectTypes(n *uir.Node, typeDefs map[string]*uir.Node) {
-	if n.Type == uir.TypeMap {
-		// Use node key as type name, or a default
-		name := n.Key
-		if name == "" {
-			name = "AnonymousType"
-		}
-		
-		// Capitalize first letter for GraphQL type conventions if needed
-		if len(name) > 0 {
-			name = strings.ToUpper(name[:1]) + name[1:]
-		}
-		
-		// If it's a root wrapper (e.g. from protobuf or graphql doc), we might just want to process its children as types
-		// But in our UIR, a TypeMap is an object type.
-		if n.TypeAnnotations["kind"] == "message" || n.TypeAnnotations["kind"] == "type" || n.Key == "graphql_root" || n.Key == "proto_root" {
-			if n.Key == "graphql_root" || n.Key == "proto_root" {
-				// The children of root are the actual types
-				for _, child := range n.Children {
-					collectTypes(child, typeDefs)
-				}
-				return // Don't add root itself as a GraphQL type if it's just a file wrapper
-			}
-			typeDefs[name] = n
-		} else {
-			// If it's a nested TypeMap, add it as well
-			typeDefs[name] = n
-		}
+// collectTypes performs a depth-first walk of the UIR graph and registers every
+// TypeMap node as a named GraphQL type. For nodes that come from parsed schemas
+// (annotated with kind=type or kind=message), the node's own Key is used as the
+// type name. For nodes inferred from JSON data, a deterministic name is synthesised
+// as ParentTypeName + "_" + capitalize(fieldKey) to avoid collisions.
+func collectTypes(n *uir.Node, typeDefs map[string]*uir.Node, parentTypeName string) {
+	if n.Type != uir.TypeMap {
+		return
 	}
 
+	// Determine the type name for this node.
+	typeName := resolveTypeName(n, parentTypeName)
+
+	// Document-root wrappers (graphql_root, proto_root) are not emitted as types
+	// themselves; only their children become types.
+	if n.Key == "graphql_root" || n.Key == "proto_root" {
+		for _, child := range n.Children {
+			collectTypes(child, typeDefs, "")
+		}
+		return
+	}
+
+	// Register this node as a type.
+	typeDefs[typeName] = n
+
+	// Recurse into children that are themselves TypeMap (nested objects).
 	for _, child := range n.Children {
-		collectTypes(child, typeDefs)
+		if child.Type == uir.TypeMap && len(child.Children) > 0 {
+			collectTypes(child, typeDefs, typeName)
+		}
 	}
 }
 
-func writeGraphQLTypeDefinition(builder *strings.Builder, name string, n *uir.Node) {
+// resolveTypeName determines the GraphQL type name for a UIR node.
+func resolveTypeName(n *uir.Node, parentTypeName string) string {
+	kind := n.TypeAnnotations["kind"]
+
+	// Schema-derived nodes already have a proper type name.
+	if kind == "type" || kind == "message" {
+		return capitalize(n.Key)
+	}
+
+	// The root node from JSON parsing.
+	if n.Key == "Root" && parentTypeName == "" {
+		return "Root"
+	}
+
+	// Nested objects inferred from JSON: synthesise a deterministic name.
+	if parentTypeName != "" {
+		return parentTypeName + "_" + capitalize(n.Key)
+	}
+
+	return capitalize(n.Key)
+}
+
+func writeGraphQLTypeDefinition(builder *strings.Builder, name string, n *uir.Node, allTypes map[string]*uir.Node) {
 	builder.WriteString(fmt.Sprintf("type %s {\n", name))
-	
-	// Sort fields for determinism
-	var fields []*uir.Node
-	fields = append(fields, n.Children...)
+
+	// Sort fields for determinism.
+	fields := make([]*uir.Node, len(n.Children))
+	copy(fields, n.Children)
 	sort.Slice(fields, func(i, j int) bool {
 		return fields[i].Key < fields[j].Key
 	})
 
 	for _, field := range fields {
-		writeGraphQLField(builder, field, 2)
+		writeGraphQLField(builder, field, name, allTypes)
 	}
 	builder.WriteString("}\n\n")
 }
 
-func writeGraphQLField(builder *strings.Builder, child *uir.Node, indent int) {
-	padding := strings.Repeat(" ", indent)
-	
+func writeGraphQLField(builder *strings.Builder, child *uir.Node, parentTypeName string, allTypes map[string]*uir.Node) {
 	var typeStr string
+
 	switch child.Type {
 	case uir.TypeArray:
-		elemType := resolveScalarType(child.ElementType, child)
-		typeStr = fmt.Sprintf("[%s]", elemType)
+		elemTypeStr := resolveFieldTypeString(child.ElementType, child, parentTypeName, allTypes)
+		typeStr = fmt.Sprintf("[%s]", elemTypeStr)
 	case uir.TypeMap:
-		typeName := child.Key
-		if typeName != "" {
-			typeStr = strings.ToUpper(typeName[:1]) + typeName[1:]
-		} else {
-			typeStr = "UnknownObject"
-		}
+		// Reference the named type that was registered for this nested object.
+		typeStr = resolveNestedTypeName(child, parentTypeName, allTypes)
 	default:
-		typeStr = resolveScalarType(child.Type, child)
+		typeStr = resolveScalarTypeString(child.Type, child)
 	}
 
+	// Determine nullability.
 	nonNull := "!"
-	if child.TypeAnnotations["nonNull"] == "true" {
-		nonNull = "!"
-	} else if child.TypeAnnotations["nonNull"] == "false" {
+	if child.TypeAnnotations["nonNull"] == "false" {
 		nonNull = ""
 	}
-
-	// For simplified determinism in this prototype, default to non-null unless specifically marked.
-	// We'll leave the ! on typeStr.
 	if !strings.HasSuffix(typeStr, "!") {
 		typeStr += nonNull
 	}
 
-	builder.WriteString(fmt.Sprintf("%s%s: %s\n", padding, child.Key, typeStr))
+	builder.WriteString(fmt.Sprintf("  %s: %s\n", child.Key, typeStr))
 }
 
-func resolveScalarType(t uir.UIRType, n *uir.Node) string {
-	// If it has a specific gql_type or proto_type, we can use that mapping
-	if gqlType, ok := n.TypeAnnotations["gql_type"]; ok {
-		return gqlType
+// resolveNestedTypeName finds the registered type name for a nested TypeMap field.
+func resolveNestedTypeName(child *uir.Node, parentTypeName string, allTypes map[string]*uir.Node) string {
+	// First try schema-derived name (kind=type or kind=message).
+	kind := child.TypeAnnotations["kind"]
+	if kind == "type" || kind == "message" {
+		return capitalize(child.Key)
 	}
-	
+
+	// Otherwise use the synthesised parent_Child name.
+	candidate := parentTypeName + "_" + capitalize(child.Key)
+	if _, ok := allTypes[candidate]; ok {
+		return candidate
+	}
+
+	// Fallback: capitalised key.
+	return capitalize(child.Key)
+}
+
+// resolveFieldTypeString resolves the GraphQL type string for an element type
+// (used inside arrays).
+func resolveFieldTypeString(t uir.UIRType, n *uir.Node, parentTypeName string, allTypes map[string]*uir.Node) string {
+	if t == uir.TypeMap {
+		return resolveNestedTypeName(n, parentTypeName, allTypes)
+	}
+	return resolveScalarTypeString(t, n)
+}
+
+// resolveScalarTypeString maps a UIR scalar type to its GraphQL equivalent.
+func resolveScalarTypeString(t uir.UIRType, n *uir.Node) string {
+	// Prefer explicit gql_type annotation if set during schema lowering.
+	if n != nil {
+		if gqlType, ok := n.TypeAnnotations["gql_type"]; ok {
+			return gqlType
+		}
+	}
+
 	switch t {
 	case uir.TypeString:
 		return "String"
@@ -140,14 +187,16 @@ func resolveScalarType(t uir.UIRType, n *uir.Node) string {
 		return "Boolean"
 	case uir.TypeInt32, uir.TypeInt64:
 		return "Int"
-	case uir.TypeMap:
-		if n != nil && n.Key != "" {
-			return strings.ToUpper(n.Key[:1]) + n.Key[1:]
-		}
-		return "Object"
 	default:
 		return "String"
 	}
+}
+
+func capitalize(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // Format ensures the bytes are well formatted.
