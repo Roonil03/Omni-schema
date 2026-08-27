@@ -29,6 +29,7 @@ type Subscription struct {
 	SchemaName      string
 	SchemaVersion   string
 	RequestedFields []ast.GraphQLSelection
+	Queue           chan []byte
 	Closed          chan struct{}
 }
 
@@ -81,8 +82,10 @@ func (b *Broker) Publish(eventType string, data any) {
 			continue
 		}
 
-		if err := sub.Conn.WriteMessage(network.OpText, payloadBytes); err != nil {
-			log.Printf("Failed to write to sub %s: %v", sub.ID, err)
+		select {
+		case sub.Queue <- payloadBytes:
+		default:
+			log.Printf("Backpressure: dropped event for sub %s (queue full)", sub.ID)
 		}
 	}
 }
@@ -162,7 +165,10 @@ func (b *Broker) projectEvent(sub *Subscription, eventType string, data any) ([]
 		return nil, fmt.Errorf("schema %s has no matching type definition for event '%s'", sub.SchemaName, eventType)
 	}
 
-	projected := uir.Project(eventRoot, schemaTarget)
+	projected, err := uir.Project(eventRoot, schemaTarget)
+	if err != nil {
+		return nil, fmt.Errorf("schema validation failed: %w", err)
+	}
 
 	// Step 3.5: If the client requested specific fields, filter the projected result.
 	if len(sub.RequestedFields) > 0 {

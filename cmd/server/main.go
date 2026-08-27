@@ -257,7 +257,21 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		// and types are coerced to match the schema's declarations.
 		outputNode := dataNode
 		if schemaMeta != nil && schemaMeta.Root != nil {
-			outputNode = uir.Project(dataNode, schemaMeta.Root)
+			schemaTarget := schemaMeta.Root
+			if len(schemaTarget.Children) > 0 {
+				schemaTarget = schemaTarget.Children[0]
+			}
+			projected, err := uir.Project(dataNode, schemaTarget)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Schema validation/projection error: %v", err), 400)
+				return
+			}
+			// Re-wrap the projected node in a root map if the original schemaTarget was a child,
+			// to preserve the target format structure if needed, or just use projected directly.
+			// Actually, codec.GenerateGraphQL expects a root node with type definitions.
+			rootWrapper := uir.NewNode(uir.TypeMap, "root", nil)
+			rootWrapper.AddChild(projected)
+			outputNode = rootWrapper
 		}
 
 		switch target {
@@ -362,7 +376,10 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 		if opcode == network.OpText {
 			var msg map[string]any
 			if err := json.Unmarshal(payload, &msg); err != nil {
-				continue
+				// Send protocol error
+				conn.WriteMessage(network.OpText, []byte(`{"type":"error", "payload":{"message":"invalid protocol frame (not JSON)"}}`))
+				conn.Close()
+				return
 			}
 			msgType, _ := msg["type"].(string)
 
@@ -397,10 +414,25 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 					SchemaName:      schemaParam,
 					SchemaVersion:   schemaVersion,
 					RequestedFields: requestedFields,
+					Queue:           make(chan []byte, 100),
 					Closed:          make(chan struct{}),
 				}
 				
 				stream.DefaultBroker.AddSubscription(sub)
+				
+				// Dedicated writer goroutine per subscriber
+				go func(s *stream.Subscription) {
+					for {
+						select {
+						case p := <-s.Queue:
+							if err := s.Conn.WriteMessage(network.OpText, p); err != nil {
+								return // network failure, let reader loop detect and cleanup
+							}
+						case <-s.Closed:
+							return // cleanly exit writer when reader closes
+						}
+					}
+				}(sub)
 				
 				// Stay in the same loop (Single Reader Goroutine)
 				// Clean up on loop exit

@@ -1,18 +1,24 @@
 package uir
 
+import (
+	"fmt"
+	"math"
+)
+
 // Project takes a data UIR graph and a schema UIR graph and returns a new UIR graph
 // containing only the fields declared in the schema, with types coerced to match the
 // schema's type declarations. Fields present in the data but absent from the schema
 // are dropped (projection semantics). Fields declared in the schema but absent from
-// the data are emitted with zero-values if the schema marks them non-null.
+// the data are evaluated strictly: if marked nonNull, it returns an error. If optional,
+// they are dropped.
 //
 // This is the core mechanism that turns a registered schema from a validation gate
 // into a genuine transformation constraint.
-func Project(data *Node, schema *Node) *Node {
+func Project(data *Node, schema *Node) (*Node, error) {
 	return projectNode(data, schema, schema.Key)
 }
 
-func projectNode(data *Node, schema *Node, typeName string) *Node {
+func projectNode(data *Node, schema *Node, typeName string) (*Node, error) {
 	projected := NewNode(schema.Type, typeName, nil)
 
 	// Copy schema annotations onto the projected node so codecs can use them.
@@ -23,8 +29,12 @@ func projectNode(data *Node, schema *Node, typeName string) *Node {
 
 	if schema.Type != TypeMap || len(schema.Children) == 0 {
 		// Leaf or scalar node: use schema type, data value.
-		projected.Value = coerceValue(data, schema.Type)
-		return projected
+		val, err := coerceValue(data, schema.Type)
+		if err != nil {
+			return nil, fmt.Errorf("field '%s': %w", schema.Key, err)
+		}
+		projected.Value = val
+		return projected, nil
 	}
 
 	// Build a lookup index on the data children by key for O(1) matching.
@@ -38,15 +48,19 @@ func projectNode(data *Node, schema *Node, typeName string) *Node {
 
 		if !found {
 			// Field is declared in the schema but absent from the data.
-			// Emit a zero-value node so the output is structurally complete.
-			zeroNode := zeroValueNode(schemaField)
-			projected.AddChild(zeroNode)
+			if schemaField.TypeAnnotations["nonNull"] == "true" {
+				return nil, fmt.Errorf("missing required field: %s", schemaField.Key)
+			}
+			// Optional field, just drop it.
 			continue
 		}
 
 		if schemaField.Type == TypeMap && len(schemaField.Children) > 0 {
 			// Recurse: the schema defines nested structure for this field.
-			childProjected := projectNode(dataChild, schemaField, schemaField.Key)
+			childProjected, err := projectNode(dataChild, schemaField, schemaField.Key)
+			if err != nil {
+				return nil, err
+			}
 			projected.AddChild(childProjected)
 		} else if schemaField.Type == TypeArray {
 			// For arrays, project each element if the schema defines element structure.
@@ -59,10 +73,17 @@ func projectNode(data *Node, schema *Node, typeName string) *Node {
 			if dataChild.Type == TypeArray {
 				for _, elem := range dataChild.Children {
 					if schemaField.ElementType == TypeMap && len(schemaField.Children) > 0 {
-						projElem := projectNode(elem, schemaField, schemaField.Key+"_item")
+						projElem, err := projectNode(elem, schemaField, schemaField.Key+"_item")
+						if err != nil {
+							return nil, err
+						}
 						arrayNode.AddChild(projElem)
 					} else {
-						scalarElem := NewNode(schemaField.ElementType, elem.Key, coerceValue(elem, schemaField.ElementType))
+						val, err := coerceValue(elem, schemaField.ElementType)
+						if err != nil {
+							return nil, fmt.Errorf("array element '%s': %w", schemaField.Key, err)
+						}
+						scalarElem := NewNode(schemaField.ElementType, elem.Key, val)
 						arrayNode.AddChild(scalarElem)
 					}
 				}
@@ -70,7 +91,11 @@ func projectNode(data *Node, schema *Node, typeName string) *Node {
 			projected.AddChild(arrayNode)
 		} else {
 			// Scalar field: use schema type, data value.
-			fieldNode := NewNode(schemaField.Type, schemaField.Key, coerceValue(dataChild, schemaField.Type))
+			val, err := coerceValue(dataChild, schemaField.Type)
+			if err != nil {
+				return nil, fmt.Errorf("field '%s': %w", schemaField.Key, err)
+			}
+			fieldNode := NewNode(schemaField.Type, schemaField.Key, val)
 			for ak, av := range schemaField.TypeAnnotations {
 				fieldNode.SetAnnotation(ak, av)
 			}
@@ -78,42 +103,60 @@ func projectNode(data *Node, schema *Node, typeName string) *Node {
 		}
 	}
 
-	return projected
+	return projected, nil
 }
 
-// coerceValue extracts the value from a data node and performs basic type coercion
-// to match the target UIR type. This handles the common JSON float64 → Int32 case.
-func coerceValue(data *Node, targetType UIRType) any {
+// coerceValue extracts the value from a data node and performs strict type coercion
+// to match the target UIR type, avoiding silent precision loss or overflows.
+func coerceValue(data *Node, targetType UIRType) (any, error) {
 	if data == nil || data.Value == nil {
-		return zeroForType(targetType)
+		return zeroForType(targetType), nil
 	}
 
 	val := data.Value
 
 	switch targetType {
 	case TypeInt32, TypeInt64:
-		// JSON numbers are always float64; coerce to int.
 		if f, ok := val.(float64); ok {
-			return int64(f)
+			// Check for fractional loss
+			if f != math.Trunc(f) {
+				return nil, fmt.Errorf("cannot safely coerce float %v to int: precision loss", f)
+			}
+			// Check bounds for int64
+			if f > math.MaxInt64 || f < math.MinInt64 {
+				return nil, fmt.Errorf("cannot safely coerce float %v to int: integer overflow", f)
+			}
+			if targetType == TypeInt32 {
+				if f > math.MaxInt32 || f < math.MinInt32 {
+					return nil, fmt.Errorf("cannot safely coerce float %v to int32: integer overflow", f)
+				}
+			}
+			return int64(f), nil
 		}
-		return val
+		if i, ok := val.(int64); ok {
+			return i, nil
+		}
+		return val, nil
 	case TypeFloat64:
 		if i, ok := val.(int64); ok {
-			return float64(i)
+			return float64(i), nil
 		}
-		return val
+		if f, ok := val.(float64); ok {
+			return f, nil
+		}
+		return val, nil
 	case TypeString:
 		if s, ok := val.(string); ok {
-			return s
+			return s, nil
 		}
-		return val
+		return val, nil
 	case TypeBoolean:
 		if b, ok := val.(bool); ok {
-			return b
+			return b, nil
 		}
-		return val
+		return val, nil
 	default:
-		return val
+		return val, nil
 	}
 }
 
