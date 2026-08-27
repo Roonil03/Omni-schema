@@ -359,6 +359,14 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 		schemaVersion = meta.Version
 	}
 
+	activeSubs := make(map[string]*stream.Subscription)
+	defer func() {
+		for _, sub := range activeSubs {
+			close(sub.Closed)
+			stream.DefaultBroker.RemoveSubscription(sub)
+		}
+	}()
+
 	// Minimal handshake protocol
 	for {
 		opcode, payload, err := conn.ReadMessage()
@@ -381,10 +389,16 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 			case "connection_init":
 				// ACK init
 				conn.WriteMessage(network.OpText, []byte(`{"type":"connection_ack"}`))
-			case "subscribe":
+			case "subscribe", "start":
 				subID, _ := msg["id"].(string)
 				if subID == "" {
 					subID = "1"
+				}
+
+				if existing, ok := activeSubs[subID]; ok {
+					close(existing.Closed)
+					stream.DefaultBroker.RemoveSubscription(existing)
+					delete(activeSubs, subID)
 				}
 
 				var requestedFields []ast.GraphQLSelection
@@ -434,11 +448,14 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 					}
 				}(sub)
 				
-				// Stay in the same loop (Single Reader Goroutine)
-				// Clean up on loop exit
-				defer stream.DefaultBroker.RemoveSubscription(sub)
-			case "complete":
-				return // Client finished, loop exits, defer cleans up
+				activeSubs[subID] = sub
+			case "complete", "stop":
+				subID, _ := msg["id"].(string)
+				if existing, ok := activeSubs[subID]; ok {
+					close(existing.Closed)
+					stream.DefaultBroker.RemoveSubscription(existing)
+					delete(activeSubs, subID)
+				}
 			}
 		}
 	}

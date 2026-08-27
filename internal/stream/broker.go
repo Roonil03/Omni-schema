@@ -75,9 +75,13 @@ func (b *Broker) Publish(sourceFormat string, eventType string, rawData []byte) 
 	}
 
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-
+	subs := make([]*Subscription, 0, len(b.subscriptions))
 	for sub := range b.subscriptions {
+		subs = append(subs, sub)
+	}
+	b.mu.RUnlock()
+
+	for _, sub := range subs {
 		payloadBytes, err := b.buildSubscriptionPayload(sub, eventType, eventRoot)
 		if err != nil {
 			log.Printf("Failed to build payload for sub %s: %v", sub.ID, err)
@@ -87,7 +91,18 @@ func (b *Broker) Publish(sourceFormat string, eventType string, rawData []byte) 
 		select {
 		case sub.Queue <- payloadBytes:
 		default:
-			log.Printf("Backpressure: dropped event for sub %s (queue full)", sub.ID)
+			// Queue is full, implement DropOldest backpressure
+			select {
+			case <-sub.Queue:
+				log.Printf("Backpressure: dropped oldest event for sub %s", sub.ID)
+			default:
+			}
+			// Retry send after making room
+			select {
+			case sub.Queue <- payloadBytes:
+			default:
+				log.Printf("Backpressure: dropped event for sub %s (queue still full)", sub.ID)
+			}
 		}
 	}
 }
