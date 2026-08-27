@@ -20,6 +20,11 @@ import (
 )
 
 func main() {
+	// Attempt to load persistent registry
+	if err := registry.Default.LoadFromFile("registry_store.json"); err != nil {
+		fmt.Printf("Note: could not load registry_store.json: %v\n", err)
+	}
+
 	http.HandleFunc("/system/schema", schemaHandler)
 	http.HandleFunc("/morph/", morphHandler)
 	http.HandleFunc("/graphql/subscriptions", subscriptionHandler)
@@ -93,6 +98,9 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Registration Error: %v", err), 500)
 		return
 	}
+
+	// Persist the registry
+	_ = registry.Default.SaveToFile("registry_store.json")
 
 	log.Printf("Registered schema %s (version %s)", meta.Name, meta.Version)
 
