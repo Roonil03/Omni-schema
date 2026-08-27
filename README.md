@@ -15,7 +15,7 @@ The gateway acts as a universal schema and payload translator. It parses incomin
 Supported formats and protocols include:
 - **Standard Text Formats**: [JSON](https://www.json.org/), [Protobuf](https://protobuf.dev/) (Experimental Placeholder)
 - **Zero-Copy & Memory-Aligned**: [Cap'n Proto](https://capnproto.org/) (Experimental Placeholder)
-- **Schemaless Binary**: [MessagePack](https://msgpack.org/) (Experimental Placeholder)
+- **Schemaless Binary**: [MessagePack](https://msgpack.org/)
 - **Columnar & Big Data**: [Apache Parquet](https://parquet.apache.org/) (Experimental Placeholder)
 - **Hierarchical Multidimensional**: [HDF5](https://www.hdfgroup.org/solutions/hdf5/) (Experimental Placeholder)
 - **Real-Time Streaming**: Native [GraphQL](https://graphql.org/) Subscriptions running over custom RFC 6455 WebSockets
