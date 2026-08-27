@@ -41,7 +41,7 @@ func encodeProtoField(tag uint64, n *uir.Node) ([]byte, error) {
 	protoType := n.TypeAnnotations["proto_type"]
 
 	switch n.Type {
-	case uir.TypeInt32, uir.TypeInt64:
+	case uir.TypeInt32, uir.TypeInt64, uir.TypeUInt32, uir.TypeUInt64:
 		var val uint64
 		switch v := n.Value.(type) {
 		case int64: val = uint64(v)
@@ -81,6 +81,12 @@ func encodeProtoField(tag uint64, n *uir.Node) ([]byte, error) {
 		buf = append(buf, encodeVarint((tag<<3)|2)...)
 		buf = append(buf, encodeVarint(uint64(len(val)))...)
 		buf = append(buf, val...)
+	case uir.TypeBytes:
+		// wire type 2 (length-delimited)
+		b, _ := n.Value.([]byte)
+		buf = append(buf, encodeVarint((tag<<3)|2)...)
+		buf = append(buf, encodeVarint(uint64(len(b)))...)
+		buf = append(buf, b...)
 	case uir.TypeBoolean:
 		// wire type 0 (varint)
 		val := uint64(0)
@@ -173,11 +179,11 @@ func parseProtobufMessage(data []byte, parent *uir.Node) error {
 			if err == nil && len(msgNode.Children) > 0 {
 				parent.AddChild(msgNode)
 			} else {
-				// Fallback to string if valid utf8, else just treat as string
+				// Fallback to string if valid utf8, else TypeBytes
 				if utf8.Valid(chunk) {
 					parent.AddChild(uir.NewNode(uir.TypeString, key, string(chunk)))
 				} else {
-					parent.AddChild(uir.NewNode(uir.TypeString, key, fmt.Sprintf("base64:%x", chunk)))
+					parent.AddChild(uir.NewNode(uir.TypeBytes, key, chunk))
 				}
 			}
 		case 5: // 32-bit

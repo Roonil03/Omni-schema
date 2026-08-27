@@ -20,6 +20,9 @@ func GenerateJSON(n *uir.Node) ([]byte, error) {
 }
 
 func uirToInterface(n *uir.Node) any {
+	if n.Type == uir.TypeNull {
+		return nil
+	}
 	if n.Type == uir.TypeMap {
 		m := make(map[string]any)
 		for _, child := range n.Children {

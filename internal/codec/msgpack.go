@@ -10,7 +10,7 @@ import (
 
 // GenerateMessagePack encodes a UIR Node graph into a schemaless binary MessagePack byte stream.
 func GenerateMessagePack(n *uir.Node) ([]byte, error) {
-	if n == nil {
+	if n == nil || n.Type == uir.TypeNull {
 		return []byte{0xc0}, nil // nil
 	}
 
@@ -30,10 +30,26 @@ func GenerateMessagePack(n *uir.Node) ([]byte, error) {
 		}
 		buf = append(buf, []byte(s)...)
 
-	case uir.TypeInt32, uir.TypeInt64:
-		// We can just use the int64 representation for logic
+	case uir.TypeBytes:
+		b, _ := n.Value.([]byte)
+		l := len(b)
+		if l <= math.MaxUint8 {
+			buf = append(buf, 0xc4, byte(l))
+		} else if l <= math.MaxUint16 {
+			buf = append(buf, 0xc5, byte(l>>8), byte(l))
+		} else {
+			buf = append(buf, 0xc6, byte(l>>24), byte(l>>16), byte(l>>8), byte(l))
+		}
+		buf = append(buf, b...)
+
+	case uir.TypeInt32, uir.TypeInt64, uir.TypeUInt32, uir.TypeUInt64:
+		var isUnsigned bool
+		var uval uint64
 		var val int64
 		switch v := n.Value.(type) {
+		case uint64:
+			isUnsigned = true
+			uval = v
 		case int64:
 			val = v
 		case int32:
@@ -42,18 +58,32 @@ func GenerateMessagePack(n *uir.Node) ([]byte, error) {
 			val = int64(v)
 		}
 
-		if val >= 0 && val <= 127 {
-			buf = append(buf, byte(val))
-		} else if val >= -32 && val <= -1 {
-			buf = append(buf, byte(val))
-		} else if val >= math.MinInt8 && val <= math.MaxInt8 {
-			buf = append(buf, 0xd0, byte(val))
-		} else if val >= math.MinInt16 && val <= math.MaxInt16 {
-			buf = append(buf, 0xd1, byte(val>>8), byte(val))
-		} else if val >= math.MinInt32 && val <= math.MaxInt32 {
-			buf = append(buf, 0xd2, byte(val>>24), byte(val>>16), byte(val>>8), byte(val))
+		if isUnsigned {
+			if uval <= 127 {
+				buf = append(buf, byte(uval))
+			} else if uval <= math.MaxUint8 {
+				buf = append(buf, 0xcc, byte(uval))
+			} else if uval <= math.MaxUint16 {
+				buf = append(buf, 0xcd, byte(uval>>8), byte(uval))
+			} else if uval <= math.MaxUint32 {
+				buf = append(buf, 0xce, byte(uval>>24), byte(uval>>16), byte(uval>>8), byte(uval))
+			} else {
+				buf = append(buf, 0xcf, byte(uval>>56), byte(uval>>48), byte(uval>>40), byte(uval>>32), byte(uval>>24), byte(uval>>16), byte(uval>>8), byte(uval))
+			}
 		} else {
-			buf = append(buf, 0xd3, byte(val>>56), byte(val>>48), byte(val>>40), byte(val>>32), byte(val>>24), byte(val>>16), byte(val>>8), byte(val))
+			if val >= 0 && val <= 127 {
+				buf = append(buf, byte(val))
+			} else if val >= -32 && val <= -1 {
+				buf = append(buf, byte(val))
+			} else if val >= math.MinInt8 && val <= math.MaxInt8 {
+				buf = append(buf, 0xd0, byte(val))
+			} else if val >= math.MinInt16 && val <= math.MaxInt16 {
+				buf = append(buf, 0xd1, byte(val>>8), byte(val))
+			} else if val >= math.MinInt32 && val <= math.MaxInt32 {
+				buf = append(buf, 0xd2, byte(val>>24), byte(val>>16), byte(val>>8), byte(val))
+			} else {
+				buf = append(buf, 0xd3, byte(val>>56), byte(val>>48), byte(val>>40), byte(val>>32), byte(val>>24), byte(val>>16), byte(val>>8), byte(val))
+			}
 		}
 
 	case uir.TypeFloat64:
@@ -128,7 +158,7 @@ func parseMessagePackValue(key string, data []byte) (*uir.Node, []byte, error) {
 
 	// nil
 	if b == 0xc0 {
-		return nil, data, nil
+		return uir.NewNode(uir.TypeNull, key, nil), data, nil
 	}
 	// false
 	if b == 0xc2 {
@@ -174,19 +204,19 @@ func parseMessagePackValue(key string, data []byte) (*uir.Node, []byte, error) {
 	// Integers
 	case 0xcc: // uint 8
 		if len(data) < 1 { return nil, data, fmt.Errorf("unexpected EOF") }
-		return uir.NewNode(uir.TypeInt64, key, int64(data[0])), data[1:], nil
+		return uir.NewNode(uir.TypeUInt64, key, uint64(data[0])), data[1:], nil
 	case 0xcd: // uint 16
 		if len(data) < 2 { return nil, data, fmt.Errorf("unexpected EOF") }
 		v := binary.BigEndian.Uint16(data)
-		return uir.NewNode(uir.TypeInt64, key, int64(v)), data[2:], nil
+		return uir.NewNode(uir.TypeUInt64, key, uint64(v)), data[2:], nil
 	case 0xce: // uint 32
 		if len(data) < 4 { return nil, data, fmt.Errorf("unexpected EOF") }
 		v := binary.BigEndian.Uint32(data)
-		return uir.NewNode(uir.TypeInt64, key, int64(v)), data[4:], nil
+		return uir.NewNode(uir.TypeUInt64, key, uint64(v)), data[4:], nil
 	case 0xcf: // uint 64
 		if len(data) < 8 { return nil, data, fmt.Errorf("unexpected EOF") }
 		v := binary.BigEndian.Uint64(data)
-		return uir.NewNode(uir.TypeInt64, key, int64(v)), data[8:], nil
+		return uir.NewNode(uir.TypeUInt64, key, v), data[8:], nil
 	case 0xd0: // int 8
 		if len(data) < 1 { return nil, data, fmt.Errorf("unexpected EOF") }
 		return uir.NewNode(uir.TypeInt64, key, int64(int8(data[0]))), data[1:], nil
@@ -212,6 +242,26 @@ func parseMessagePackValue(key string, data []byte) (*uir.Node, []byte, error) {
 		if len(data) < 8 { return nil, data, fmt.Errorf("unexpected EOF") }
 		v := math.Float64frombits(binary.BigEndian.Uint64(data))
 		return uir.NewNode(uir.TypeFloat64, key, v), data[8:], nil
+
+	// Binaries
+	case 0xc4: // bin 8
+		if len(data) < 1 { return nil, data, fmt.Errorf("unexpected EOF") }
+		l := int(data[0])
+		data = data[1:]
+		if len(data) < l { return nil, data, fmt.Errorf("unexpected EOF") }
+		return uir.NewNode(uir.TypeBytes, key, data[:l]), data[l:], nil
+	case 0xc5: // bin 16
+		if len(data) < 2 { return nil, data, fmt.Errorf("unexpected EOF") }
+		l := int(binary.BigEndian.Uint16(data))
+		data = data[2:]
+		if len(data) < l { return nil, data, fmt.Errorf("unexpected EOF") }
+		return uir.NewNode(uir.TypeBytes, key, data[:l]), data[l:], nil
+	case 0xc6: // bin 32
+		if len(data) < 4 { return nil, data, fmt.Errorf("unexpected EOF") }
+		l := int(binary.BigEndian.Uint32(data))
+		data = data[4:]
+		if len(data) < l { return nil, data, fmt.Errorf("unexpected EOF") }
+		return uir.NewNode(uir.TypeBytes, key, data[:l]), data[l:], nil
 
 	// Strings
 	case 0xd9: // str 8

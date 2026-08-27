@@ -27,6 +27,9 @@ func ParseJSON(data []byte) (*uir.Node, error) {
 func MapToUIR(parent *uir.Node, data map[string]any) {
 	for k, v := range data {
 		switch val := v.(type) {
+		case nil:
+			child := uir.NewNode(uir.TypeNull, k, nil)
+			parent.AddChild(child)
 		case string:
 			child := uir.NewNode(uir.TypeString, k, val)
 			parent.AddChild(child)
@@ -46,6 +49,8 @@ func MapToUIR(parent *uir.Node, data map[string]any) {
 			for i, elem := range val {
 				elemKey := fmt.Sprintf("%d", i)
 				switch ev := elem.(type) {
+				case nil:
+					child.AddChild(uir.NewNode(uir.TypeNull, elemKey, nil))
 				case map[string]any:
 					elemNode := uir.NewNode(uir.TypeMap, elemKey, nil)
 					MapToUIR(elemNode, ev)
@@ -75,6 +80,8 @@ func inferArrayElementType(arr []any) uir.UIRType {
 		return uir.TypeString
 	}
 	switch arr[0].(type) {
+	case nil:
+		return uir.TypeNull
 	case map[string]any:
 		return uir.TypeMap
 	case float64:

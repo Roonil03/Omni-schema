@@ -143,6 +143,35 @@ func coerceValue(data *Node, targetType UIRType) (any, error) {
 		if i, ok := val.(int64); ok {
 			return i, nil
 		}
+		if u, ok := val.(uint64); ok {
+			if targetType == TypeInt32 && u > math.MaxInt32 {
+				return nil, fmt.Errorf("cannot safely coerce uint64 to int32: overflow")
+			}
+			if u > math.MaxInt64 {
+				return nil, fmt.Errorf("cannot safely coerce uint64 to int64: overflow")
+			}
+			return int64(u), nil
+		}
+		return val, nil
+	case TypeUInt32, TypeUInt64:
+		if f, ok := val.(float64); ok {
+			if f < 0 || f != math.Trunc(f) || f > math.MaxUint64 {
+				return nil, fmt.Errorf("cannot safely coerce float %v to uint", f)
+			}
+			if targetType == TypeUInt32 && f > math.MaxUint32 {
+				return nil, fmt.Errorf("cannot safely coerce float %v to uint32", f)
+			}
+			return uint64(f), nil
+		}
+		if u, ok := val.(uint64); ok {
+			return u, nil
+		}
+		if i, ok := val.(int64); ok {
+			if i < 0 {
+				return nil, fmt.Errorf("cannot safely coerce negative int to uint")
+			}
+			return uint64(i), nil
+		}
 		return val, nil
 	case TypeFloat64:
 		if i, ok := val.(int64); ok {
@@ -162,6 +191,16 @@ func coerceValue(data *Node, targetType UIRType) (any, error) {
 			return b, nil
 		}
 		return val, nil
+	case TypeBytes:
+		if b, ok := val.([]byte); ok {
+			return b, nil
+		}
+		if s, ok := val.(string); ok {
+			return []byte(s), nil
+		}
+		return val, nil
+	case TypeNull:
+		return nil, nil
 	default:
 		return val, nil
 	}
@@ -170,10 +209,16 @@ func coerceValue(data *Node, targetType UIRType) (any, error) {
 // zeroForType returns the zero-value for a given UIR type.
 func zeroForType(t UIRType) any {
 	switch t {
+	case TypeNull:
+		return nil
+	case TypeBytes:
+		return []byte{}
 	case TypeString:
 		return ""
 	case TypeInt32, TypeInt64:
 		return int64(0)
+	case TypeUInt32, TypeUInt64:
+		return uint64(0)
 	case TypeFloat64:
 		return float64(0)
 	case TypeBoolean:
