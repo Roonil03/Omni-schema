@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"text/scanner"
 
@@ -88,7 +89,8 @@ func (l *ProtoLexer) parseMessage() (*ast.ProtoMessage, error) {
 		if l.tok != scanner.Int {
 			return nil, fmt.Errorf("expected tag number for field %s", fieldName)
 		}
-		l.next() // consume tag number (not parsing int for this stub)
+		tagNum, _ := strconv.Atoi(l.scan.TokenText())
+		l.next() // consume tag number
 
 		if l.scan.TokenText() != ";" {
 			return nil, fmt.Errorf("expected ';' at end of field %s", fieldName)
@@ -99,6 +101,7 @@ func (l *ProtoLexer) parseMessage() (*ast.ProtoMessage, error) {
 			Repeated: isRepeated,
 			Type:     fieldType,
 			Name:     fieldName,
+			Tag:      tagNum,
 		})
 	}
 

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"strconv"
 	"unicode/utf8"
 
 	"omni-schema/internal/uir"
@@ -19,6 +20,11 @@ func GenerateProtobuf(n *uir.Node) ([]byte, error) {
 		var buf []byte
 		for i, child := range n.Children {
 			tag := uint64(i + 1) // basic sequential tag if none in annotations
+			if tagStr, ok := child.TypeAnnotations["proto_number"]; ok {
+				if t, err := strconv.ParseUint(tagStr, 10, 64); err == nil {
+					tag = t
+				}
+			}
 			childBytes, err := encodeProtoField(tag, child)
 			if err != nil {
 				return nil, err
@@ -32,9 +38,10 @@ func GenerateProtobuf(n *uir.Node) ([]byte, error) {
 
 func encodeProtoField(tag uint64, n *uir.Node) ([]byte, error) {
 	var buf []byte
+	protoType := n.TypeAnnotations["proto_type"]
+
 	switch n.Type {
 	case uir.TypeInt32, uir.TypeInt64:
-		// wire type 0 (varint)
 		var val uint64
 		switch v := n.Value.(type) {
 		case int64: val = uint64(v)
@@ -42,8 +49,32 @@ func encodeProtoField(tag uint64, n *uir.Node) ([]byte, error) {
 		case int: val = uint64(v)
 		case uint64: val = v
 		}
-		buf = append(buf, encodeVarint(tag<<3)...)
-		buf = append(buf, encodeVarint(val)...)
+
+		if protoType == "sint32" || protoType == "sint64" {
+			var signed int64
+			switch v := n.Value.(type) {
+			case int64: signed = v
+			case int32: signed = int64(v)
+			case int: signed = int64(v)
+			}
+			val = uint64((signed << 1) ^ (signed >> 63))
+		}
+
+		if protoType == "fixed32" || protoType == "sfixed32" {
+			buf = append(buf, encodeVarint((tag<<3)|5)...)
+			var b [4]byte
+			binary.LittleEndian.PutUint32(b[:], uint32(val))
+			buf = append(buf, b[:]...)
+		} else if protoType == "fixed64" || protoType == "sfixed64" {
+			buf = append(buf, encodeVarint((tag<<3)|1)...)
+			var b [8]byte
+			binary.LittleEndian.PutUint64(b[:], val)
+			buf = append(buf, b[:]...)
+		} else {
+			// wire type 0 (varint)
+			buf = append(buf, encodeVarint(tag<<3)...)
+			buf = append(buf, encodeVarint(val)...)
+		}
 	case uir.TypeString:
 		// wire type 2 (length-delimited)
 		val := []byte(n.Value.(string))

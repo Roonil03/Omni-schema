@@ -45,6 +45,13 @@ func projectNode(data *Node, schema *Node, typeName string) (*Node, error) {
 
 	for _, schemaField := range schema.Children {
 		dataChild, found := dataIndex[schemaField.Key]
+		
+		if !found {
+			// Alias-aware fallback: try matching by protobuf tag number if present
+			if protoNum, ok := schemaField.TypeAnnotations["proto_number"]; ok {
+				dataChild, found = dataIndex[protoNum]
+			}
+		}
 
 		if !found {
 			// Field is declared in the schema but absent from the data.

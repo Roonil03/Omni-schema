@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"strconv"
 	"omni-schema/internal/ast"
 	"omni-schema/internal/uir"
 )
@@ -18,6 +19,7 @@ func LowerProtobuf(file *ast.ProtoFile) *uir.Node {
 				fieldNode.ElementType = mapProtoType(field.Type, false)
 			}
 			fieldNode.SetAnnotation("proto_type", field.Type)
+			fieldNode.SetAnnotation("proto_number", strconv.Itoa(field.Tag))
 			msgNode.AddChild(fieldNode)
 		}
 		
