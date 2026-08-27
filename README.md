@@ -136,6 +136,12 @@ For detailed API specifications, supported format matrices, WebSocket subscripti
 
 - **[API Documentation](./API_DOCUMENTATION.md)**: Full endpoint reference and usage guide.
 - **[Credits](./Credits.md)**: Acknowledgments and roles of the engineering team members who contributed to this project.
+- **GraphQL Schema Ingestion**: Parses GraphQL SDL, including `interface`, `union`, `enum`, `input`, and complex nested types (`[[Type!]!]!`).
+- **Protobuf Integration**: Supports basic schema-driven translation (`.proto` files), accurately preserving wire-types, tags, and signedness rules.
+- **WebSocket Streaming**: Includes a custom-built, lock-free, zero-dependency RFC 6455 WebSocket broker supporting multi-client backpressure (`DropOldest`) and realtime format conversion.
+- **Experimental Codecs**: Includes heavily constrained/placeholder implementations of Cap'n Proto, Parquet, and HDF5 for exploratory purposes. (Note: These are partial subset implementations and not yet fully interoperable).
+- **Production Telemetry**: Integrates atomic performance counters, `/healthz` endpoints, strict HTTP `MaxBytesReader` payload limits, and structured JSON `slog` logging.
+- **Zero Third-Party Dependencies**: The entire project uses only the Go standard library.
 
 ### Architecture Snapshot
 - **Lexers & ASTs**: Constructed natively utilizing `text/scanner` without third-party parsing libraries.
