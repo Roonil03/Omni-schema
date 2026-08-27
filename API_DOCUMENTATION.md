@@ -33,9 +33,9 @@ Upload a source file or raw data stream and receive the synthesized output as a 
 | `json` | `graphql` | `.graphql` | `application/graphql` |
 | `json` | `protobuf` | `.pb` | `application/protobuf` |
 | `json` | `msgpack` | `.msgpack` | `application/msgpack` |
-| `json` | `parquet` | `.parquet` | `application/parquet` *(Experimental)* |
-| `json` | `capnproto` | `.capnp` | `application/capnproto` *(Experimental)* |
-| `json` | `hdf5` | `.h5` | `application/x-hdf5` *(Experimental)* |
+| `json` | `parquet` | `.parquet` | `application/parquet` |
+| `json` | `capnproto` | `.capnp` | `application/capnproto` |
+| `json` | `hdf5` | `.h5` | `application/x-hdf5` |
 | `json` | `json` | `.json` | `application/json` |
 
 ---
