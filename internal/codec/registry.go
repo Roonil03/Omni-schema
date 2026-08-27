@@ -63,9 +63,11 @@ func init() {
 	RegisterDecoder("capnproto", DecoderFunc(ParseCapnProto))
 	RegisterDecoder("parquet", DecoderFunc(ParseParquet))
 	RegisterDecoder("hdf5", DecoderFunc(ParseHDF5))
+	RegisterDecoder("graphql", DecoderFunc(ParseGraphQLResult))
 
 	// Register all existing built-in encoders
-	RegisterEncoder("graphql", EncoderFunc(GenerateGraphQL))
+	RegisterEncoder("graphql", EncoderFunc(GenerateGraphQLResult))
+	RegisterEncoder("graphql_sdl", EncoderFunc(GenerateGraphQLSDL))
 	RegisterEncoder("protobuf", EncoderFunc(GenerateProtobuf))
 	RegisterEncoder("msgpack", EncoderFunc(GenerateMessagePack))
 	RegisterEncoder("parquet", EncoderFunc(GenerateParquet))

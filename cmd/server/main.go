@@ -343,6 +343,11 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 		schemaParam = "default"
 	}
 
+	targetParam := r.URL.Query().Get("target")
+	if targetParam == "" {
+		targetParam = "graphql"
+	}
+
 	// Option A: Bind to the active schema version at connection time.
 	meta, ok := registry.Default.GetActive(schemaParam)
 	schemaVersion := "unknown"
@@ -402,6 +407,7 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 					RequestedFields: requestedFields,
 					Queue:           make(chan []byte, 100),
 					Closed:          make(chan struct{}),
+					TargetFormat:    targetParam,
 				}
 				
 				stream.DefaultBroker.AddSubscription(sub)
@@ -411,7 +417,11 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 					for {
 						select {
 						case p := <-s.Queue:
-							if err := s.Conn.WriteMessage(network.OpText, p); err != nil {
+							opCode := network.OpText
+							if s.TargetFormat != "graphql" && s.TargetFormat != "json" {
+								opCode = network.OpBinary
+							}
+							if err := s.Conn.WriteMessage(opCode, p); err != nil {
 								return // network failure, let reader loop detect and cleanup
 							}
 						case <-s.Closed:

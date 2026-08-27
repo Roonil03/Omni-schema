@@ -30,6 +30,8 @@ type Subscription struct {
 	RequestedFields []ast.GraphQLSelection
 	Queue           chan []byte
 	Closed          chan struct{}
+	TargetFormat    string
+	SourceFormat    string
 }
 
 // DefaultBroker is the global event broker.
@@ -45,7 +47,7 @@ func (b *Broker) AddSubscription(sub *Subscription) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.subscriptions[sub] = true
-	log.Printf("Added subscription %s bound to schema %s:%s", sub.ID, sub.SchemaName, sub.SchemaVersion)
+	log.Printf("Added subscription %s bound to schema %s:%s (format: %s)", sub.ID, sub.SchemaName, sub.SchemaVersion, sub.TargetFormat)
 }
 
 func (b *Broker) RemoveSubscription(sub *Subscription) {
@@ -59,12 +61,6 @@ func (b *Broker) RemoveSubscription(sub *Subscription) {
 }
 
 // Publish decodes an incoming event using the registry and routes it to all active subscribers.
-// The full pipeline is:
-//	event bytes → codec.GetDecoder(sourceFormat) → event UIR graph
-//	  → registry.GetVersion(sub.SchemaName, sub.SchemaVersion) → schema UIR
-//	  → uir.Project(eventUIR, schemaUIR) → projected UIR
-//	  → codec.GenerateJSON(projected) → GraphQL result JSON
-//	  → wrap in subscription envelope → WebSocket text frame
 func (b *Broker) Publish(sourceFormat string, eventType string, rawData []byte) {
 	decoder, err := codec.GetDecoder(sourceFormat)
 	if err != nil {
@@ -96,61 +92,93 @@ func (b *Broker) Publish(sourceFormat string, eventType string, rawData []byte) 
 	}
 }
 
-// buildSubscriptionPayload constructs the GraphQL-over-WebSocket response for a
-// single subscriber, projecting the event data through the UIR if a schema is bound.
+// buildSubscriptionPayload constructs the response for a single subscriber, 
+// projecting the event data through the UIR and encoding to TargetFormat.
 func (b *Broker) buildSubscriptionPayload(sub *Subscription, eventType string, eventRoot *uir.Node) ([]byte, error) {
-	var resultData any
-	var errorsList []map[string]any
+	var finalNode *uir.Node
+	var err error
 
 	if sub.SchemaVersion != "unknown" {
-		// Schema-aware path: convert event data to UIR, project against schema, generate JSON data payload.
-		projectedJSONBytes, err := b.projectEvent(sub, eventType, eventRoot)
+		finalNode, err = b.projectEventToNode(sub, eventType, eventRoot)
 		if err != nil {
-			// Projection failed. Fail closed and emit a GraphQL error.
 			log.Printf("Projection failed for sub %s: %v", sub.ID, err)
-			errorsList = append(errorsList, map[string]any{"message": err.Error()})
-		} else {
-			resultData = map[string]any{
-				eventType: json.RawMessage(projectedJSONBytes),
-			}
+			return nil, err
 		}
 	} else {
-		// No schema bound — raw JSON passthrough.
-		// Since we have an eventRoot UIR node instead of a raw map, we can just serialize it directly.
-		rawJSON, _ := codec.GenerateJSON(eventRoot)
-		resultData = map[string]any{eventType: json.RawMessage(rawJSON)}
+		finalNode = eventRoot
 	}
 
-	payload := map[string]any{
-		"id":   sub.ID,
-		"type": "next",
-		"payload": map[string]any{
-			"data": resultData,
-		},
-	}
-	
-	if len(errorsList) > 0 {
-		payload["payload"].(map[string]any)["errors"] = errorsList
+	// Use generic encoder for the target format
+	encoder, err := codec.GetEncoder(sub.TargetFormat)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get encoder for target format %s: %v", sub.TargetFormat, err)
 	}
 
-	return json.Marshal(payload)
+	encodedBytes, err := encoder.Encode(finalNode)
+	if err != nil {
+		return nil, fmt.Errorf("encoding failed for %s: %v", sub.TargetFormat, err)
+	}
+
+	// If the target is graphql, wrap it in a subscription envelope
+	if sub.TargetFormat == "graphql" || sub.TargetFormat == "json" {
+		// GraphQL over WebSocket format requires an envelope
+		// Note: The GraphQLResult encoder returns {"data": {...}}
+		var resultData json.RawMessage
+		if sub.TargetFormat == "graphql" {
+			// Strip the {"data": ...} to fit in the graphql-ws envelope.
+			// Actually, GenerateGraphQLResult returns exactly {"data": {...}}, 
+			// so we can just embed it in the payload.
+			resultData = json.RawMessage(encodedBytes)
+		} else {
+			resultData = json.RawMessage(encodedBytes)
+		}
+		
+		envelope := map[string]any{
+			"id":   sub.ID,
+			"type": "next",
+			"payload": resultData,
+		}
+		
+		if sub.TargetFormat == "json" {
+			envelope["payload"] = map[string]any{"data": map[string]any{eventType: json.RawMessage(encodedBytes)}}
+		} else {
+			// For graphql, encodedBytes is already a JSON object {"data": ...}, we just need to wrap it inside the "payload" key
+			// Wait, the payload field in graphql-ws *is* the GraphQL response, i.e., {"data": {...}, "errors": [...]}.
+			// So `encodedBytes` is perfectly formatted to be the `payload` value.
+			var gqlPayload map[string]any
+			json.Unmarshal(encodedBytes, &gqlPayload)
+			
+			// We have to wrap it back in the top-level event type key
+			dataMap, ok := gqlPayload["data"].(map[string]any)
+			if ok {
+				newPayload := map[string]any{
+					"data": map[string]any{
+						eventType: dataMap,
+					},
+				}
+				envelope["payload"] = newPayload
+			} else {
+				envelope["payload"] = gqlPayload
+			}
+		}
+
+		return json.Marshal(envelope)
+	}
+
+	return encodedBytes, nil
 }
 
-// projectEvent retrieves the subscriber's bound schema from the registry, projects the
-// event UIR against the schema UIR, and returns the projected result as a JSON byte array.
-func (b *Broker) projectEvent(sub *Subscription, eventType string, eventRoot *uir.Node) ([]byte, error) {
-	// Step 1: Retrieve the subscriber's bound schema version from the registry.
+// projectEventToNode retrieves the subscriber's bound schema from the registry, projects the
+// event UIR against the schema UIR, and returns the projected UIR Node.
+func (b *Broker) projectEventToNode(sub *Subscription, eventType string, eventRoot *uir.Node) (*uir.Node, error) {
 	schemaMeta, found := registry.Default.GetVersion(sub.SchemaName, sub.SchemaVersion)
 	if !found {
 		return nil, fmt.Errorf("schema %s version %s not found in registry", sub.SchemaName, sub.SchemaVersion)
 	}
 
-	// Step 3: Project the event UIR against the schema UIR.
-	// Map the event type to the corresponding type in the schema.
 	var schemaTarget *uir.Node
 	if schemaMeta.Root != nil {
 		for _, child := range schemaMeta.Root.Children {
-			// simple heuristic: match event type string to type name ignoring case
 			if strings.EqualFold(child.Key, eventType) {
 				schemaTarget = child
 				break
@@ -167,16 +195,9 @@ func (b *Broker) projectEvent(sub *Subscription, eventType string, eventRoot *ui
 		return nil, fmt.Errorf("schema validation failed: %w", err)
 	}
 
-	// Step 3.5: If the client requested specific fields, filter the projected result.
 	if len(sub.RequestedFields) > 0 {
 		projected = filterBySelection(projected, sub.RequestedFields)
 	}
 
-	// Step 4: Generate actual JSON data from the projected UIR (Not Schema SDL).
-	jsonBytes, err := codec.GenerateJSON(projected)
-	if err != nil {
-		return nil, fmt.Errorf("JSON payload generation failed: %w", err)
-	}
-
-	return jsonBytes, nil
+	return projected, nil
 }
