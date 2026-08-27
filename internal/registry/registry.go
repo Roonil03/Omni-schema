@@ -32,6 +32,8 @@ type Registry struct {
 	schemas map[string][]*SchemaMetadata
 	// active maps a schema name to its latest version hash
 	active map[string]string
+	// StoragePath is the file path for persistence
+	StoragePath string
 }
 
 // Default is the global registry instance.
@@ -45,15 +47,22 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register stores a parsed schema. It hashes the raw content to identify identical versions.
+// Register stores a parsed schema. It hashes the canonical UIR to identify identical versions.
 // If the content is identical to the active version, it returns the existing one to avoid duplicates.
+// It transactionally writes to disk if StoragePath is set.
 func (r *Registry) Register(name, format string, rawContent []byte, root *uir.Node) (*SchemaMetadata, error) {
 	if name == "" {
 		return nil, fmt.Errorf("schema name cannot be empty")
 	}
 
-	hash := sha256.Sum256(rawContent)
-	versionHash := hex.EncodeToString(hash[:]) // Full SHA-256 hash
+	// Semantic hash: hash the UIR JSON instead of the raw string to ignore whitespace/formatting
+	canonicalBytes, err := json.Marshal(root)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal UIR for semantic hash: %w", err)
+	}
+
+	hash := sha256.Sum256(canonicalBytes)
+	versionHash := hex.EncodeToString(hash[:])
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -61,8 +70,10 @@ func (r *Registry) Register(name, format string, rawContent []byte, root *uir.No
 	// Check if this exact version is already the active one
 	if activeHash, ok := r.active[name]; ok && activeHash == versionHash {
 		versions := r.schemas[name]
-		if len(versions) > 0 {
-			return versions[len(versions)-1], nil
+		for _, v := range versions {
+			if v.Version == versionHash {
+				return v, nil
+			}
 		}
 	}
 
@@ -75,8 +86,23 @@ func (r *Registry) Register(name, format string, rawContent []byte, root *uir.No
 		Timestamp:  time.Now(),
 	}
 
+	prevActive, hasPrevActive := r.active[name]
+
 	r.schemas[name] = append(r.schemas[name], meta)
 	r.active[name] = versionHash
+
+	if r.StoragePath != "" {
+		if err := r.saveToFileLocked(r.StoragePath); err != nil {
+			// Rollback memory state
+			r.schemas[name] = r.schemas[name][:len(r.schemas[name])-1]
+			if hasPrevActive {
+				r.active[name] = prevActive
+			} else {
+				delete(r.active, name)
+			}
+			return nil, fmt.Errorf("persistence failed, rolling back: %w", err)
+		}
+	}
 
 	return meta, nil
 }
@@ -86,11 +112,19 @@ func (r *Registry) GetActive(name string) (*SchemaMetadata, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	versions, exists := r.schemas[name]
-	if !exists || len(versions) == 0 {
+	activeHash, ok := r.active[name]
+	if !ok {
 		return nil, false
 	}
-	return versions[len(versions)-1], true
+	
+	versions := r.schemas[name]
+	for _, v := range versions {
+		if v.Version == activeHash {
+			return v, true
+		}
+	}
+
+	return nil, false
 }
 
 // GetVersion retrieves a specific version of a registered schema.
@@ -114,7 +148,10 @@ func (r *Registry) GetVersion(name, version string) (*SchemaMetadata, bool) {
 func (r *Registry) SaveToFile(filename string) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.saveToFileLocked(filename)
+}
 
+func (r *Registry) saveToFileLocked(filename string) error {
 	var allSchemas []*SchemaMetadata
 	for _, versions := range r.schemas {
 		allSchemas = append(allSchemas, versions...)
@@ -125,7 +162,6 @@ func (r *Registry) SaveToFile(filename string) error {
 		return err
 	}
 
-	// Write to a temporary file first then rename to avoid corruption
 	tempFile := filename + ".tmp"
 	if err := os.WriteFile(tempFile, data, 0644); err != nil {
 		return err
@@ -167,6 +203,12 @@ func (r *Registry) LoadFromFile(filename string) error {
 			if err == nil {
 				root = lower.LowerGraphQL(doc)
 			}
+		case "proto":
+			l := &lexer.ProtoLexer{}
+			doc, err := l.Parse(string(meta.RawContent))
+			if err == nil {
+				root = lower.LowerProtobuf(doc)
+			}
 		case "json":
 			// Basic JSON schema parse
 		}
@@ -178,4 +220,3 @@ func (r *Registry) LoadFromFile(filename string) error {
 
 	return nil
 }
-

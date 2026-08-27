@@ -26,6 +26,7 @@ import (
 
 func main() {
 	// Attempt to load persistent registry
+	registry.Default.StoragePath = "registry_store.json"
 	if err := registry.Default.LoadFromFile("registry_store.json"); err != nil {
 		fmt.Printf("Note: could not load registry_store.json: %v\n", err)
 	}
@@ -124,15 +125,12 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Phase 2: Register in schema registry
+	// Phase 2: Register in schema registry (which now auto-persists)
 	meta, err := registry.Default.Register(schemaName, ext, body, rootNode)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Registration Error: %v", err), 500)
 		return
 	}
-
-	// Persist the registry
-	_ = registry.Default.SaveToFile("registry_store.json")
 
 	log.Printf("Registered schema %s (version %s)", meta.Name, meta.Version)
 
