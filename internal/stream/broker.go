@@ -190,7 +190,11 @@ func (b *Broker) projectEventToNode(sub *Subscription, eventType string, eventRo
 		return nil, fmt.Errorf("schema %s has no matching type definition for event '%s'", sub.SchemaName, eventType)
 	}
 
-	projected, err := uir.Project(eventRoot, schemaTarget)
+	opts := uir.ProjectOptions{
+		UnknownFields:      uir.UnknownFieldIgnore,
+		EmitNullForMissing: true,
+	}
+	projected, err := uir.Project(eventRoot, schemaTarget, opts)
 	if err != nil {
 		return nil, fmt.Errorf("schema validation failed: %w", err)
 	}

@@ -37,10 +37,43 @@ type GraphQLField struct {
 }
 func (*GraphQLField) isGraphQLSelection() {}
 
+type GraphQLTypeRef struct {
+	NamedType string
+	IsList    bool
+	IsNonNull bool
+	InnerType *GraphQLTypeRef
+}
+
 // GraphQLFieldDefinition represents a field inside a type definition.
 type GraphQLFieldDefinition struct {
-	Name     string
-	Type     string
-	IsList   bool
-	NonNull  bool
+	Name string
+	Type *GraphQLTypeRef
 }
+
+// GraphQLEnumDefinition represents an enum definition.
+type GraphQLEnumDefinition struct {
+	Name   string
+	Values []string
+}
+func (*GraphQLEnumDefinition) isGraphQLDefinition() {}
+
+// GraphQLUnionDefinition represents a union definition.
+type GraphQLUnionDefinition struct {
+	Name  string
+	Types []string
+}
+func (*GraphQLUnionDefinition) isGraphQLDefinition() {}
+
+// GraphQLInterfaceDefinition represents an interface definition.
+type GraphQLInterfaceDefinition struct {
+	Name   string
+	Fields []*GraphQLFieldDefinition
+}
+func (*GraphQLInterfaceDefinition) isGraphQLDefinition() {}
+
+// GraphQLInputDefinition represents an input type definition.
+type GraphQLInputDefinition struct {
+	Name   string
+	Fields []*GraphQLFieldDefinition
+}
+func (*GraphQLInputDefinition) isGraphQLDefinition() {}

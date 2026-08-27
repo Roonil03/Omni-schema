@@ -270,7 +270,11 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		if len(schemaTarget.Children) > 0 {
 			schemaTarget = schemaTarget.Children[0]
 		}
-		projected, err := uir.Project(dataNode, schemaTarget)
+		opts := uir.ProjectOptions{
+			UnknownFields:      uir.UnknownFieldIgnore,
+			EmitNullForMissing: true,
+		}
+		projected, err := uir.Project(dataNode, schemaTarget, opts)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Schema validation/projection error: %v", err), 400)
 			return

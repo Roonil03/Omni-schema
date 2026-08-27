@@ -5,20 +5,31 @@ import (
 	"math"
 )
 
-// Project takes a data UIR graph and a schema UIR graph and returns a new UIR graph
-// containing only the fields declared in the schema, with types coerced to match the
-// schema's type declarations. Fields present in the data but absent from the schema
-// are dropped (projection semantics). Fields declared in the schema but absent from
-// the data are evaluated strictly: if marked nonNull, it returns an error. If optional,
-// they are dropped.
-//
-// This is the core mechanism that turns a registered schema from a validation gate
-// into a genuine transformation constraint.
-func Project(data *Node, schema *Node) (*Node, error) {
-	return projectNode(data, schema, schema.Key)
+type UnknownFieldPolicy int
+
+const (
+	UnknownFieldIgnore UnknownFieldPolicy = iota
+	UnknownFieldStrict
+	UnknownFieldPreserve
+)
+
+type ProjectOptions struct {
+	UnknownFields      UnknownFieldPolicy
+	EmitNullForMissing bool
 }
 
-func projectNode(data *Node, schema *Node, typeName string) (*Node, error) {
+// Project takes a data UIR graph and a schema UIR graph and returns a new UIR graph
+// containing only the fields declared in the schema, with types coerced to match the
+// schema's type declarations.
+func Project(data *Node, schema *Node, opts ...ProjectOptions) (*Node, error) {
+	opt := ProjectOptions{}
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	return projectNode(data, schema, schema.Key, opt)
+}
+
+func projectNode(data *Node, schema *Node, typeName string, opt ProjectOptions) (*Node, error) {
 	projected := NewNode(schema.Type, typeName, nil)
 
 	// Copy schema annotations onto the projected node so codecs can use them.
@@ -43,6 +54,8 @@ func projectNode(data *Node, schema *Node, typeName string) (*Node, error) {
 		dataIndex[dc.Key] = dc
 	}
 
+	matchedData := make(map[string]bool)
+
 	for _, schemaField := range schema.Children {
 		dataChild, found := dataIndex[schemaField.Key]
 		
@@ -55,16 +68,25 @@ func projectNode(data *Node, schema *Node, typeName string) (*Node, error) {
 
 		if !found {
 			// Field is declared in the schema but absent from the data.
-			if schemaField.TypeAnnotations["nonNull"] == "true" {
+			if defVal, ok := schemaField.TypeAnnotations["default"]; ok {
+				// Parse default string into correct UIR type simply
+				defNode := NewNode(TypeString, schemaField.Key, defVal)
+				val, _ := coerceValue(defNode, schemaField.Type)
+				n := NewNode(schemaField.Type, schemaField.Key, val)
+				projected.AddChild(n)
+			} else if schemaField.TypeAnnotations["nonNull"] == "true" {
 				return nil, fmt.Errorf("missing required field: %s", schemaField.Key)
+			} else if opt.EmitNullForMissing {
+				projected.AddChild(NewNode(TypeNull, schemaField.Key, nil))
 			}
-			// Optional field, just drop it.
 			continue
 		}
 
+		matchedData[dataChild.Key] = true
+
 		if schemaField.Type == TypeMap && len(schemaField.Children) > 0 {
 			// Recurse: the schema defines nested structure for this field.
-			childProjected, err := projectNode(dataChild, schemaField, schemaField.Key)
+			childProjected, err := projectNode(dataChild, schemaField, schemaField.Key, opt)
 			if err != nil {
 				return nil, err
 			}
@@ -80,7 +102,7 @@ func projectNode(data *Node, schema *Node, typeName string) (*Node, error) {
 			if dataChild.Type == TypeArray {
 				for _, elem := range dataChild.Children {
 					if schemaField.ElementType == TypeMap && len(schemaField.Children) > 0 {
-						projElem, err := projectNode(elem, schemaField, schemaField.Key+"_item")
+						projElem, err := projectNode(elem, schemaField, schemaField.Key+"_item", opt)
 						if err != nil {
 							return nil, err
 						}
@@ -107,6 +129,18 @@ func projectNode(data *Node, schema *Node, typeName string) (*Node, error) {
 				fieldNode.SetAnnotation(ak, av)
 			}
 			projected.AddChild(fieldNode)
+		}
+	}
+
+	if opt.UnknownFields != UnknownFieldIgnore {
+		for _, dc := range data.Children {
+			if !matchedData[dc.Key] {
+				if opt.UnknownFields == UnknownFieldStrict {
+					return nil, fmt.Errorf("unknown field in data: %s", dc.Key)
+				} else if opt.UnknownFields == UnknownFieldPreserve {
+					projected.AddChild(dc)
+				}
+			}
 		}
 	}
 
