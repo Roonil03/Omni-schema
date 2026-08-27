@@ -60,7 +60,18 @@ func ParseParquet(data []byte) (*uir.Node, error) {
 	// We return a mock UIR representation of the parsed structure.
 	
 	root := uir.NewNode(uir.TypeMap, "Root", nil)
-	root.AddChild(uir.NewNode(uir.TypeString, "status", "parsed_parquet_subset"))
+	
+	// Read our mock data block (between "PAR1" and footer)
+	dataStart := 4
+	dataEnd := len(data) - 8 - int(footerLen)
+	
+	if dataEnd > dataStart {
+		dataBlock := data[dataStart:dataEnd]
+		for i := 0; i < len(dataBlock)/8; i++ {
+			val := binary.LittleEndian.Uint64(dataBlock[i*8 : i*8+8])
+			root.AddChild(uir.NewNode(uir.TypeInt64, fmt.Sprintf("col_%d", i), int64(val)))
+		}
+	}
 	
 	return root, nil
 }

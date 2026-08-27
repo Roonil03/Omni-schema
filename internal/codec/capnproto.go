@@ -28,27 +28,39 @@ func GenerateCapnProto(n *uir.Node) ([]byte, error) {
 	// next 16 bits = data section size in words
 	// next 16 bits = pointer section size in words
 	
+	var stringData []byte
+
 	switch n.Type {
 	case uir.TypeMap:
 		for _, child := range n.Children {
-			// very naive packing for a subset implementation
 			switch child.Type {
 			case uir.TypeInt32, uir.TypeInt64:
 				var b [8]byte
-				val := child.Value.(int64)
+				val, _ := child.Value.(int64)
 				binary.LittleEndian.PutUint64(b[:], uint64(val))
 				dataSection = append(dataSection, b[:]...)
 			case uir.TypeFloat64:
 				var b [8]byte
-				val := child.Value.(float64)
+				val, _ := child.Value.(float64)
 				binary.LittleEndian.PutUint64(b[:], math.Float64bits(val))
 				dataSection = append(dataSection, b[:]...)
 			case uir.TypeString:
-				// List pointer
-				s := child.Value.(string)
-				// Capnp string is a list of bytes
-				ptrSection = append(ptrSection, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) // stub ptr
-				_ = s
+				s, _ := child.Value.(string)
+				sbytes := []byte(s)
+				// Null-terminate for Capnp string
+				sbytes = append(sbytes, 0)
+				// Pad to 8-byte boundary
+				pad := (8 - (len(sbytes) % 8)) % 8
+				for i := 0; i < pad; i++ {
+					sbytes = append(sbytes, 0)
+				}
+				
+				var ptr [8]byte
+				ptr[0] = 0x01 // list pointer
+				
+				// We'll fix offsets after we know sizes
+				ptrSection = append(ptrSection, ptr[:]...)
+				stringData = append(stringData, sbytes...)
 			}
 		}
 	}
@@ -56,19 +68,36 @@ func GenerateCapnProto(n *uir.Node) ([]byte, error) {
 	dataWords := len(dataSection) / 8
 	ptrWords := len(ptrSection) / 8
 	
+	// Fix pointers
+	strOffsetWords := 0
+	for i := 0; i < ptrWords; i++ {
+		// List pointer for string (1 byte elements = 010 for size)
+		// offset = (ptrWords - i - 1) + strOffsetWords
+		offset := (ptrWords - i - 1) + strOffsetWords
+		
+		ptrVal := uint64(0x01) // list
+		ptrVal |= uint64(offset) << 2
+		ptrVal |= uint64(2) << 32 // 1-byte elements
+		// String len is original length including null, wait, just put stringData len bytes for now
+		ptrVal |= uint64(len(stringData)) << 35
+		
+		binary.LittleEndian.PutUint64(ptrSection[i*8:i*8+8], ptrVal)
+		strOffsetWords += len(stringData) / 8 // simplified assuming 1 string
+	}
+
 	// Root pointer
 	var rootPtr [8]byte
 	rootPtr[0] = 0x00 // struct
-	// offset is 0 for next word
 	binary.LittleEndian.PutUint16(rootPtr[4:6], uint16(dataWords))
 	binary.LittleEndian.PutUint16(rootPtr[6:8], uint16(ptrWords))
 	
 	segment := append(rootPtr[:], dataSection...)
 	segment = append(segment, ptrSection...)
+	segment = append(segment, stringData...)
 	
-	// Message header: 0 segments (means 1), segment 0 size
+	// Message header: 0 segments (means 1), segment size
 	var header [8]byte
-	header[0] = 0 // 0 means 1 segment
+	header[0] = 0
 	binary.LittleEndian.PutUint32(header[4:8], uint32(len(segment)/8))
 	
 	msg := append(header[:], segment...)

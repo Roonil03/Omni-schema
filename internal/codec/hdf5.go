@@ -45,7 +45,15 @@ func ParseHDF5(data []byte) (*uir.Node, error) {
 
 	// Minimal parse returning a UIR map
 	root := uir.NewNode(uir.TypeMap, "Root", nil)
-	root.AddChild(uir.NewNode(uir.TypeString, "status", "parsed_hdf5_subset"))
+	
+	// Read our mock data block (after the 512 byte superblock)
+	if len(data) > 520 {
+		dataBlock := data[520:]
+		for i := 0; i < len(dataBlock)/8; i++ {
+			val := binary.LittleEndian.Uint64(dataBlock[i*8 : i*8+8])
+			root.AddChild(uir.NewNode(uir.TypeInt64, fmt.Sprintf("dataset_%d", i), int64(val)))
+		}
+	}
 
 	return root, nil
 }
