@@ -442,8 +442,8 @@ func devEventHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", 400)
 		return
 	}
-	
-	stream.DefaultBroker.Publish(evt.Type, evt.Data)
+	rawBytes, _ := json.Marshal(evt.Data)
+	stream.DefaultBroker.Publish("json", evt.Type, rawBytes)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status": "published"}`))
 }

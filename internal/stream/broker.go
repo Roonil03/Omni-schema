@@ -9,7 +9,6 @@ import (
 
 	"omni-schema/internal/ast"
 	"omni-schema/internal/codec"
-	"omni-schema/internal/lexer"
 	"omni-schema/internal/network"
 	"omni-schema/internal/registry"
 	"omni-schema/internal/uir"
@@ -59,24 +58,31 @@ func (b *Broker) RemoveSubscription(sub *Subscription) {
 	}
 }
 
-// Publish routes an event to all active subscribers. The full pipeline is:
-//
-//	event (map[string]any)
-//	  → lexer.MapToUIR → event UIR graph
+// Publish decodes an incoming event using the registry and routes it to all active subscribers.
+// The full pipeline is:
+//	event bytes → codec.GetDecoder(sourceFormat) → event UIR graph
 //	  → registry.GetVersion(sub.SchemaName, sub.SchemaVersion) → schema UIR
 //	  → uir.Project(eventUIR, schemaUIR) → projected UIR
-//	  → codec.GenerateGraphQL(projected) → GraphQL result string
-//	  → wrap in subscription envelope
-//	  → WebSocket text frame
-//
-// If the subscriber has no schema bound (version == "unknown"), the event is sent
-// as raw JSON passthrough for backwards compatibility.
-func (b *Broker) Publish(eventType string, data any) {
+//	  → codec.GenerateJSON(projected) → GraphQL result JSON
+//	  → wrap in subscription envelope → WebSocket text frame
+func (b *Broker) Publish(sourceFormat string, eventType string, rawData []byte) {
+	decoder, err := codec.GetDecoder(sourceFormat)
+	if err != nil {
+		log.Printf("Unsupported source format %s: %v", sourceFormat, err)
+		return
+	}
+
+	eventRoot, err := decoder.Decode(rawData)
+	if err != nil {
+		log.Printf("Failed to decode event payload: %v", err)
+		return
+	}
+
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
 	for sub := range b.subscriptions {
-		payloadBytes, err := b.buildSubscriptionPayload(sub, eventType, data)
+		payloadBytes, err := b.buildSubscriptionPayload(sub, eventType, eventRoot)
 		if err != nil {
 			log.Printf("Failed to build payload for sub %s: %v", sub.ID, err)
 			continue
@@ -92,13 +98,13 @@ func (b *Broker) Publish(eventType string, data any) {
 
 // buildSubscriptionPayload constructs the GraphQL-over-WebSocket response for a
 // single subscriber, projecting the event data through the UIR if a schema is bound.
-func (b *Broker) buildSubscriptionPayload(sub *Subscription, eventType string, data any) ([]byte, error) {
+func (b *Broker) buildSubscriptionPayload(sub *Subscription, eventType string, eventRoot *uir.Node) ([]byte, error) {
 	var resultData any
 	var errorsList []map[string]any
 
 	if sub.SchemaVersion != "unknown" {
 		// Schema-aware path: convert event data to UIR, project against schema, generate JSON data payload.
-		projectedJSONBytes, err := b.projectEvent(sub, eventType, data)
+		projectedJSONBytes, err := b.projectEvent(sub, eventType, eventRoot)
 		if err != nil {
 			// Projection failed. Fail closed and emit a GraphQL error.
 			log.Printf("Projection failed for sub %s: %v", sub.ID, err)
@@ -110,7 +116,9 @@ func (b *Broker) buildSubscriptionPayload(sub *Subscription, eventType string, d
 		}
 	} else {
 		// No schema bound — raw JSON passthrough.
-		resultData = map[string]any{eventType: data}
+		// Since we have an eventRoot UIR node instead of a raw map, we can just serialize it directly.
+		rawJSON, _ := codec.GenerateJSON(eventRoot)
+		resultData = map[string]any{eventType: json.RawMessage(rawJSON)}
 	}
 
 	payload := map[string]any{
@@ -128,21 +136,10 @@ func (b *Broker) buildSubscriptionPayload(sub *Subscription, eventType string, d
 	return json.Marshal(payload)
 }
 
-// projectEvent converts the raw event data into a UIR graph, retrieves the subscriber's
-// bound schema from the registry, projects the event UIR against the schema UIR, and
-// returns the projected result as a JSON byte array.
-func (b *Broker) projectEvent(sub *Subscription, eventType string, data any) ([]byte, error) {
-	// Step 1: Convert the event data to a UIR graph.
-	dataMap, ok := data.(map[string]any)
-	if !ok {
-		// If the data is not a map, wrap it so we have a consistent structure.
-		dataMap = map[string]any{"value": data}
-	}
-
-	eventRoot := uir.NewNode(uir.TypeMap, "event", nil)
-	lexer.MapToUIR(eventRoot, dataMap)
-
-	// Step 2: Retrieve the subscriber's bound schema version from the registry.
+// projectEvent retrieves the subscriber's bound schema from the registry, projects the
+// event UIR against the schema UIR, and returns the projected result as a JSON byte array.
+func (b *Broker) projectEvent(sub *Subscription, eventType string, eventRoot *uir.Node) ([]byte, error) {
+	// Step 1: Retrieve the subscriber's bound schema version from the registry.
 	schemaMeta, found := registry.Default.GetVersion(sub.SchemaName, sub.SchemaVersion)
 	if !found {
 		return nil, fmt.Errorf("schema %s version %s not found in registry", sub.SchemaName, sub.SchemaVersion)

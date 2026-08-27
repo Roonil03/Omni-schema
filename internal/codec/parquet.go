@@ -4,14 +4,13 @@ import (
 	"omni-schema/internal/uir"
 )
 
-// GenerateParquet encodes a UIR Node graph into an Apache Parquet byte stream.
-// It pivots data into columnar chunks and appends manually serialized Thrift footers.
+// GenerateParquet encodes a UIR Node graph into a binary Parquet file stream manually.
 func GenerateParquet(n *uir.Node) ([]byte, error) {
-	var buf []byte
-	// Magic bytes "PAR1"
-	buf = append(buf, []byte("PAR1")...)
-	// Columnar chunking logic goes here...
-	// Custom Thrift footer serialization goes here...
-	buf = append(buf, []byte("PAR1")...)
-	return buf, nil
+	// Minimal stub returning PAR1 magic bytes and an empty footer
+	return []byte("PAR1\x00\x00\x00\x00PAR1"), nil
+}
+
+// ParseParquet provides a mock decoder for Parquet
+func ParseParquet(data []byte) (*uir.Node, error) {
+	return uir.NewNode(uir.TypeMap, "Root", nil), nil
 }

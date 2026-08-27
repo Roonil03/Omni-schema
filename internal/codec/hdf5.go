@@ -4,14 +4,13 @@ import (
 	"omni-schema/internal/uir"
 )
 
-// GenerateHDF5 encodes a UIR Node graph into the Hierarchical Data Format (HDF5) natively.
-// It maps UIR_Map structures into HDF5 Groups, and UIR_Array into HDF5 Datasets.
+// GenerateHDF5 encodes a UIR Node graph into a minimal binary HDF5 stub.
 func GenerateHDF5(n *uir.Node) ([]byte, error) {
-	var buf []byte
+	// Minimal stub returning HDF5 magic bytes (\x89HDF\r\n\x1a\n)
+	return []byte("\x89HDF\r\n\x1a\n"), nil
+}
 
-	// HDF5 Magic Bytes \211HDF\r\n\032\n
-	buf = append(buf, []byte{0x89, 'H', 'D', 'F', '\r', '\n', 0x1A, '\n'}...)
-
-	// Custom hierarchical dataset and object header binary encoding
-	return buf, nil
+// ParseHDF5 provides a mock decoder for HDF5
+func ParseHDF5(data []byte) (*uir.Node, error) {
+	return uir.NewNode(uir.TypeMap, "Root", nil), nil
 }

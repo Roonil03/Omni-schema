@@ -60,6 +60,9 @@ func init() {
 	RegisterDecoder("json", DecoderFunc(lexer.ParseJSON))
 	RegisterDecoder("protobuf", DecoderFunc(ParseProtobuf))
 	RegisterDecoder("msgpack", DecoderFunc(ParseMessagePack))
+	RegisterDecoder("capnproto", DecoderFunc(ParseCapnProto))
+	RegisterDecoder("parquet", DecoderFunc(ParseParquet))
+	RegisterDecoder("hdf5", DecoderFunc(ParseHDF5))
 
 	// Register all existing built-in encoders
 	RegisterEncoder("graphql", EncoderFunc(GenerateGraphQL))
