@@ -2,42 +2,48 @@ package lexer
 
 import (
 	"encoding/json"
+	"fmt"
+	
 	"omni-schema/internal/uir"
 )
 
-// ParseJSON takes a raw JSON payload and unmarshals it, recursively converting
-// the Go types into a Universal Intermediate Representation (UIR) Node graph.
+// ParseJSON parses a JSON payload and maps it into a UIR Node structure directly.
 func ParseJSON(data []byte) (*uir.Node, error) {
-	var parsed any
-	err := json.Unmarshal(data, &parsed)
-	if err != nil {
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, err
 	}
 
-	return buildUIRNode("root", parsed), nil
+	root := uir.NewNode(uir.TypeMap, "json_root", nil)
+	mapToUIR(root, payload)
+	
+	return root, nil
 }
 
-func buildUIRNode(key string, val any) *uir.Node {
-	switch v := val.(type) {
-	case map[string]any:
-		n := uir.NewNode(uir.TypeMap, key, nil)
-		for k, childVal := range v {
-			n.AddChild(buildUIRNode(k, childVal))
+func mapToUIR(parent *uir.Node, data map[string]any) {
+	for k, v := range data {
+		switch val := v.(type) {
+		case string:
+			child := uir.NewNode(uir.TypeString, k, val)
+			parent.AddChild(child)
+		case float64:
+			child := uir.NewNode(uir.TypeFloat64, k, val)
+			parent.AddChild(child)
+		case bool:
+			child := uir.NewNode(uir.TypeBoolean, k, val)
+			parent.AddChild(child)
+		case map[string]any:
+			child := uir.NewNode(uir.TypeMap, k, nil)
+			mapToUIR(child, val)
+			parent.AddChild(child)
+		case []any:
+			child := uir.NewNode(uir.TypeArray, k, nil)
+			// Simple fallback for array of unknown
+			child.ElementType = uir.TypeString 
+			parent.AddChild(child)
+		default:
+			child := uir.NewNode(uir.TypeString, k, fmt.Sprintf("%v", val))
+			parent.AddChild(child)
 		}
-		return n
-	case []any:
-		n := uir.NewNode(uir.TypeArray, key, nil)
-		for _, childVal := range v {
-			n.AddChild(buildUIRNode("", childVal))
-		}
-		return n
-	case string:
-		return uir.NewNode(uir.TypeString, key, v)
-	case float64:
-		return uir.NewNode(uir.TypeFloat64, key, v)
-	case bool:
-		return uir.NewNode(uir.TypeBoolean, key, v)
-	default:
-		return uir.NewNode(uir.TypeUnknown, key, v)
 	}
 }

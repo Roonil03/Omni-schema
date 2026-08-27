@@ -15,8 +15,14 @@ type GraphQLOperation struct {
 	Name          string
 	Selections    []GraphQLSelection
 }
+func (*GraphQLOperation) isGraphQLDefinition() {}
 
-func (GraphQLOperation) isGraphQLDefinition() {}
+// GraphQLTypeDefinition represents a type definition (e.g., type User { ... }).
+type GraphQLTypeDefinition struct {
+	Name   string
+	Fields []*GraphQLFieldDefinition
+}
+func (*GraphQLTypeDefinition) isGraphQLDefinition() {}
 
 type GraphQLSelection interface {
 	isGraphQLSelection()
@@ -29,5 +35,12 @@ type GraphQLField struct {
 	Arguments  map[string]any
 	Selections []GraphQLSelection
 }
+func (*GraphQLField) isGraphQLSelection() {}
 
-func (GraphQLField) isGraphQLSelection() {}
+// GraphQLFieldDefinition represents a field inside a type definition.
+type GraphQLFieldDefinition struct {
+	Name     string
+	Type     string
+	IsList   bool
+	NonNull  bool
+}
