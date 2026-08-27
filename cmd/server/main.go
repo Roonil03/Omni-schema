@@ -242,63 +242,47 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var synthesize func() ([]byte, error)
-
-	switch source {
-	case "json":
-		dataNode, parseErr := lexer.ParseJSON(body)
-		if parseErr != nil {
-			http.Error(w, fmt.Sprintf("Error parsing %s: %v", source, parseErr), 400)
-			return
-		}
-
-		// Schema-aware projection: if a schema is registered, project the data
-		// UIR against the schema UIR so that only schema-declared fields survive
-		// and types are coerced to match the schema's declarations.
-		outputNode := dataNode
-		if schemaMeta != nil && schemaMeta.Root != nil {
-			schemaTarget := schemaMeta.Root
-			if len(schemaTarget.Children) > 0 {
-				schemaTarget = schemaTarget.Children[0]
-			}
-			projected, err := uir.Project(dataNode, schemaTarget)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Schema validation/projection error: %v", err), 400)
-				return
-			}
-			// Re-wrap the projected node in a root map if the original schemaTarget was a child,
-			// to preserve the target format structure if needed, or just use projected directly.
-			// Actually, codec.GenerateGraphQL expects a root node with type definitions.
-			rootWrapper := uir.NewNode(uir.TypeMap, "root", nil)
-			rootWrapper.AddChild(projected)
-			outputNode = rootWrapper
-		}
-
-		switch target {
-		case "graphql":
-			synthesize = func() ([]byte, error) { return codec.GenerateGraphQL(outputNode) }
-		case "protobuf":
-			synthesize = func() ([]byte, error) { return codec.GenerateProtobuf(outputNode) }
-		case "msgpack":
-			synthesize = func() ([]byte, error) { return codec.GenerateMessagePack(outputNode) }
-		case "parquet":
-			synthesize = func() ([]byte, error) { return codec.GenerateParquet(outputNode) }
-		case "capnproto":
-			synthesize = func() ([]byte, error) { return codec.GenerateCapnProto(outputNode) }
-		case "hdf5":
-			synthesize = func() ([]byte, error) { return codec.GenerateHDF5(outputNode) }
-		case "json":
-			synthesize = func() ([]byte, error) { return codec.GenerateJSON(outputNode) }
-		default:
-			http.Error(w, fmt.Sprintf("Unsupported target format: %s", target), 400)
-			return
-		}
-	default:
-		http.Error(w, fmt.Sprintf("Unsupported source format: %s", source), 400)
+	decoder, err := codec.GetDecoder(source)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
 
-	out, err := synthesize()
+	encoder, err := codec.GetEncoder(target)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	dataNode, parseErr := decoder.Decode(body)
+	if parseErr != nil {
+		http.Error(w, fmt.Sprintf("Error parsing %s: %v", source, parseErr), 400)
+		return
+	}
+
+	// Schema-aware projection: if a schema is registered, project the data
+	// UIR against the schema UIR so that only schema-declared fields survive
+	// and types are coerced to match the schema's declarations.
+	outputNode := dataNode
+	if schemaMeta != nil && schemaMeta.Root != nil {
+		schemaTarget := schemaMeta.Root
+		if len(schemaTarget.Children) > 0 {
+			schemaTarget = schemaTarget.Children[0]
+		}
+		projected, err := uir.Project(dataNode, schemaTarget)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Schema validation/projection error: %v", err), 400)
+			return
+		}
+		// Re-wrap the projected node in a root map if the original schemaTarget was a child,
+		// to preserve the target format structure if needed, or just use projected directly.
+		// Actually, codec.GenerateGraphQL expects a root node with type definitions.
+		rootWrapper := uir.NewNode(uir.TypeMap, "root", nil)
+		rootWrapper.AddChild(projected)
+		outputNode = rootWrapper
+	}
+
+	out, err := encoder.Encode(outputNode)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error synthesizing %s: %v", target, err), 500)
 		return
