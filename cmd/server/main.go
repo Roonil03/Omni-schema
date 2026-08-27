@@ -102,7 +102,8 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 	var rootNode *uir.Node
 
 	// Phase 1: Parse and Lower to UIR
-	if ext == "graphql" || ext == "gql" {
+	switch ext {
+	case "graphql", "gql":
 		l := &lexer.GraphQLLexer{}
 		astDoc, err := l.Parse(string(body))
 		if err != nil {
@@ -110,7 +111,7 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rootNode = lower.LowerGraphQL(astDoc)
-	} else if ext == "proto" {
+	case "proto":
 		l := &lexer.ProtoLexer{}
 		astDoc, err := l.Parse(string(body))
 		if err != nil {
@@ -118,7 +119,7 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rootNode = lower.LowerProtobuf(astDoc)
-	} else {
+	default:
 		http.Error(w, "Unsupported schema format", 400)
 		return
 	}
@@ -367,10 +368,11 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			msgType, _ := msg["type"].(string)
 
-			if msgType == "connection_init" {
+			switch msgType {
+			case "connection_init":
 				// ACK init
 				conn.WriteMessage(network.OpText, []byte(`{"type":"connection_ack"}`))
-			} else if msgType == "subscribe" {
+			case "subscribe":
 				subID, _ := msg["id"].(string)
 				if subID == "" {
 					subID = "1"
@@ -421,7 +423,7 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 				// Stay in the same loop (Single Reader Goroutine)
 				// Clean up on loop exit
 				defer stream.DefaultBroker.RemoveSubscription(sub)
-			} else if msgType == "complete" {
+			case "complete":
 				return // Client finished, loop exits, defer cleans up
 			}
 		}
