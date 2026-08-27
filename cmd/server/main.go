@@ -21,6 +21,7 @@ import (
 	"omni-schema/internal/network"
 	"omni-schema/internal/registry"
 	"omni-schema/internal/stream"
+	"omni-schema/internal/telemetry"
 	"omni-schema/internal/uir"
 )
 
@@ -31,10 +32,19 @@ func main() {
 		fmt.Printf("Note: could not load registry_store.json: %v\n", err)
 	}
 
-	http.HandleFunc("/system/schema", schemaHandler)
-	http.HandleFunc("/morph/", morphHandler)
-	http.HandleFunc("/graphql/subscriptions", subscriptionHandler)
-	http.HandleFunc("/dev/events", devEventHandler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/system/schema", schemaHandler)
+	mux.HandleFunc("/morph/", morphHandler)
+	mux.HandleFunc("/graphql/subscriptions", subscriptionHandler)
+	mux.HandleFunc("/dev/events", devEventHandler)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "metrics": telemetry.GetMetricsSnapshot()})
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ready"))
+	})
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -42,14 +52,18 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: nil, // uses DefaultServeMux
+		Addr:           ":" + port,
+		Handler:        mux,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1MB
 	}
 
 	go func() {
-		fmt.Printf("Omni-Schema Gateway starting on :%s...\n", port)
+		telemetry.Logger.Info("Omni-Schema Gateway starting", "port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %s\n", err)
+			telemetry.Logger.Error("Server failed", "error", err)
 		}
 	}()
 
@@ -80,6 +94,7 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 		schemaName = "default"
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit
 	err := r.ParseMultipartForm(10 << 20)
 	if err != nil {
 		http.Error(w, "Error parsing form", http.StatusBadRequest)
@@ -132,6 +147,9 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	telemetry.HttpRequests.Add(1)
+	telemetry.SchemasRegistered.Add(1)
+
 	log.Printf("Registered schema %s (version %s)", meta.Name, meta.Version)
 
 	resp := map[string]any{
@@ -151,6 +169,9 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	telemetry.HttpRequests.Add(1)
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit
 
 	// Determine if schema was explicitly requested
 	schemaParam := r.URL.Query().Get("schema")
@@ -274,6 +295,7 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		projected, err := uir.Project(dataNode, schemaTarget, opts)
 		if err != nil {
+			telemetry.ConversionFailures.Add(1)
 			http.Error(w, fmt.Sprintf("Schema validation/projection error: %v", err), 400)
 			return
 		}
@@ -334,6 +356,10 @@ func targetFileInfo(target string) (ext string, contentType string) {
 
 // subscriptionHandler manages the WebSocket upgrade and ties into the event broker
 func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	telemetry.HttpRequests.Add(1)
+	telemetry.WebSocketConns.Add(1)
+	defer telemetry.WebSocketConns.Add(^uint64(0)) // decrement on exit
+
 	conn, err := network.UpgradeToWebSocket(w, r)
 	if err != nil {
 		http.Error(w, "WebSocket Upgrade Failed", 400)
@@ -465,6 +491,10 @@ func devEventHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	
+	telemetry.HttpRequests.Add(1)
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20) // 5MB limit
+	
 	var evt struct {
 		Type string `json:"type"`
 		Data any    `json:"data"`

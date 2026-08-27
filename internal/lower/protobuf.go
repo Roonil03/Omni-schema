@@ -33,12 +33,18 @@ func mapProtoType(protoType string, repeated bool) uir.UIRType {
 		return uir.TypeArray
 	}
 	switch protoType {
-	case "string", "bytes":
+	case "bytes":
+		return uir.TypeBytes
+	case "string":
 		return uir.TypeString
-	case "int32", "uint32", "sint32", "fixed32", "sfixed32":
+	case "int32", "sint32", "sfixed32":
 		return uir.TypeInt32
-	case "int64", "uint64", "sint64", "fixed64", "sfixed64":
+	case "uint32", "fixed32":
+		return uir.TypeUInt32
+	case "int64", "sint64", "sfixed64":
 		return uir.TypeInt64
+	case "uint64", "fixed64":
+		return uir.TypeUInt64
 	case "float", "double":
 		return uir.TypeFloat64
 	case "bool":

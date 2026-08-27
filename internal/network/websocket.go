@@ -24,6 +24,8 @@ const (
 	OpPong         Opcode = 0xA
 )
 
+const MaxMessageSize = 5 << 20 // 5 MB limit per message
+
 type Conn struct {
 	netConn net.Conn
 	rw      *bufio.ReadWriter
@@ -109,6 +111,15 @@ func (c *Conn) ReadMessage() (Opcode, []byte, error) {
 			if _, err := io.ReadFull(c.rw, maskKey); err != nil {
 				return 0, nil, err
 			}
+		}
+
+		if payloadLen > MaxMessageSize {
+			c.Close()
+			return 0, nil, errors.New("websocket message exceeds max size")
+		}
+		if assembling && uint64(len(messageBuf))+payloadLen > MaxMessageSize {
+			c.Close()
+			return 0, nil, errors.New("websocket assembled message exceeds max size")
 		}
 
 		payload := make([]byte, payloadLen)
