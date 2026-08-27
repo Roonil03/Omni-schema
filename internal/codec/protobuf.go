@@ -32,7 +32,7 @@ func encodeProtoField(tag uint64, n *uir.Node) ([]byte, error) {
 	case uir.TypeInt32, uir.TypeInt64:
 		// wire type 0 (varint)
 		val := uint64(n.Value.(int64))
-		buf = append(buf, encodeVarint((tag<<3)|0)...)
+		buf = append(buf, encodeVarint(tag<<3)...)
 		buf = append(buf, encodeVarint(val)...)
 	case uir.TypeString:
 		// wire type 2 (length-delimited)
@@ -46,7 +46,7 @@ func encodeProtoField(tag uint64, n *uir.Node) ([]byte, error) {
 		if n.Value.(bool) {
 			val = 1
 		}
-		buf = append(buf, encodeVarint((tag<<3)|0)...)
+		buf = append(buf, encodeVarint(tag<<3)...)
 		buf = append(buf, encodeVarint(val)...)
 	case uir.TypeMap:
 		// wire type 2 (length-delimited embedded message)
