@@ -115,11 +115,14 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Determine if schema was explicitly requested
 	schemaParam := r.URL.Query().Get("schema")
+	var schemaMeta *registry.SchemaMetadata
 	if schemaParam != "" {
-		if _, ok := registry.Default.GetActive(schemaParam); !ok {
+		meta, ok := registry.Default.GetActive(schemaParam)
+		if !ok {
 			http.Error(w, fmt.Sprintf("Requested schema %s not found in registry", schemaParam), 404)
 			return
 		}
+		schemaMeta = meta
 	}
 
 	var body []byte
@@ -203,17 +206,23 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch source {
 	case "json":
-		// For the sake of schema testing without full JSON parsing implementation
-		// we treat the JSON morph request as "parse json -> morph to target"
-		node, parseErr := lexer.ParseJSON(body)
+		dataNode, parseErr := lexer.ParseJSON(body)
 		if parseErr != nil {
 			http.Error(w, fmt.Sprintf("Error parsing %s: %v", source, parseErr), 400)
 			return
 		}
-		
+
+		// Schema-aware projection: if a schema is registered, project the data
+		// UIR against the schema UIR so that only schema-declared fields survive
+		// and types are coerced to match the schema's declarations.
+		outputNode := dataNode
+		if schemaMeta != nil && schemaMeta.Root != nil {
+			outputNode = uir.Project(dataNode, schemaMeta.Root)
+		}
+
 		switch target {
 		case "graphql":
-			synthesize = func() ([]byte, error) { return codec.GenerateGraphQL(node) }
+			synthesize = func() ([]byte, error) { return codec.GenerateGraphQL(outputNode) }
 		default:
 			http.Error(w, fmt.Sprintf("Unsupported target format: %s", target), 400)
 			return
