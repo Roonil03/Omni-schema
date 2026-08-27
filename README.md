@@ -18,6 +18,8 @@ Supported formats and protocols include:
 - **Schemaless Binary**: [MessagePack](https://msgpack.org/)
 - **Columnar & Big Data**: [Apache Parquet](https://parquet.apache.org/)
 - **Hierarchical Multidimensional**: [HDF5](https://www.hdfgroup.org/solutions/hdf5/)
+- **Data Serialization**: [Apache Avro](https://avro.apache.org/)
+- **REST APIs**: [OData](https://www.odata.org/)
 - **Real-Time Streaming**: Native [GraphQL](https://graphql.org/) Subscriptions running over custom RFC 6455 WebSockets
 
 ---

@@ -36,6 +36,8 @@ Upload a source file or raw data stream and receive the synthesized output as a 
 | `json` | `parquet` | `.parquet` | `application/parquet` |
 | `json` | `capnproto` | `.capnp` | `application/capnproto` |
 | `json` | `hdf5` | `.h5` | `application/x-hdf5` |
+| `json` | `avro` | `.avro` | `application/avro` |
+| `json` | `odata` | `.json` | `application/json` |
 | `json` | `json` | `.json` | `application/json` |
 
 ---
