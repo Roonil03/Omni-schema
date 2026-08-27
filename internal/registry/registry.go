@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"omni-schema/internal/lexer"
+	"omni-schema/internal/lower"
 	"omni-schema/internal/uir"
 )
 
@@ -164,11 +165,7 @@ func (r *Registry) LoadFromFile(filename string) error {
 			l := &lexer.GraphQLLexer{}
 			doc, err := l.Parse(string(meta.RawContent))
 			if err == nil {
-				// Re-lower
-				// Since we can't easily re-import the lowerer here due to cycle issues, 
-				// we'll just leave root nil for now or rely on the fact that production 
-				// systems would have a proper codec registry.
-				_ = doc // Keep simple for the test
+				root = lower.LowerGraphQL(doc)
 			}
 		case "json":
 			// Basic JSON schema parse

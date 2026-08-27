@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"omni-schema/internal/ast"
 	"omni-schema/internal/codec"
@@ -30,10 +35,36 @@ func main() {
 	http.HandleFunc("/graphql/subscriptions", subscriptionHandler)
 	http.HandleFunc("/dev/events", devEventHandler)
 
-	fmt.Println("Omni-Schema Gateway starting on :8080...")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		panic(err)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
+
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: nil, // uses DefaultServeMux
+	}
+
+	go func() {
+		fmt.Printf("Omni-Schema Gateway starting on :%s...\n", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+
+	// Wait for interrupt signal to gracefully shut down the server with a timeout of 5 seconds.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("Server forced to shutdown:", err)
+	}
+
+	log.Println("Server exiting")
 }
 
 // schemaHandler parses raw schema files and registers them in the UIR memory.

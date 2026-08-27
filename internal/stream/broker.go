@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
-	"time"
 
 	"omni-schema/internal/ast"
 	"omni-schema/internal/codec"
@@ -91,17 +91,18 @@ func (b *Broker) Publish(eventType string, data any) {
 // single subscriber, projecting the event data through the UIR if a schema is bound.
 func (b *Broker) buildSubscriptionPayload(sub *Subscription, eventType string, data any) ([]byte, error) {
 	var resultData any
+	var errorsList []map[string]any
 
 	if sub.SchemaVersion != "unknown" {
-		// Schema-aware path: convert event data to UIR, project against schema, generate GraphQL.
-		projected, err := b.projectEvent(sub, eventType, data)
+		// Schema-aware path: convert event data to UIR, project against schema, generate JSON data payload.
+		projectedJSONBytes, err := b.projectEvent(sub, eventType, data)
 		if err != nil {
-			// Fall back to raw passthrough on projection failure.
-			log.Printf("Projection failed for sub %s, falling back to raw: %v", sub.ID, err)
-			resultData = map[string]any{eventType: data}
+			// Projection failed. Fail closed and emit a GraphQL error.
+			log.Printf("Projection failed for sub %s: %v", sub.ID, err)
+			errorsList = append(errorsList, map[string]any{"message": err.Error()})
 		} else {
 			resultData = map[string]any{
-				eventType: projected,
+				eventType: json.RawMessage(projectedJSONBytes),
 			}
 		}
 	} else {
@@ -113,10 +114,12 @@ func (b *Broker) buildSubscriptionPayload(sub *Subscription, eventType string, d
 		"id":   sub.ID,
 		"type": "next",
 		"payload": map[string]any{
-			"data":             resultData,
-			"__schema_version": sub.SchemaVersion,
-			"__timestamp":      time.Now().Unix(),
+			"data": resultData,
 		},
+	}
+	
+	if len(errorsList) > 0 {
+		payload["payload"].(map[string]any)["errors"] = errorsList
 	}
 
 	return json.Marshal(payload)
@@ -124,8 +127,8 @@ func (b *Broker) buildSubscriptionPayload(sub *Subscription, eventType string, d
 
 // projectEvent converts the raw event data into a UIR graph, retrieves the subscriber's
 // bound schema from the registry, projects the event UIR against the schema UIR, and
-// returns the projected result as a map[string]any for JSON serialisation.
-func (b *Broker) projectEvent(sub *Subscription, eventType string, data any) (any, error) {
+// returns the projected result as a JSON byte array.
+func (b *Broker) projectEvent(sub *Subscription, eventType string, data any) ([]byte, error) {
 	// Step 1: Convert the event data to a UIR graph.
 	dataMap, ok := data.(map[string]any)
 	if !ok {
@@ -143,17 +146,20 @@ func (b *Broker) projectEvent(sub *Subscription, eventType string, data any) (an
 	}
 
 	// Step 3: Project the event UIR against the schema UIR.
-	// We need to find the appropriate type in the schema to project against.
-	// Use the first child type of the schema root as the projection target.
+	// Map the event type to the corresponding type in the schema.
 	var schemaTarget *uir.Node
-	if schemaMeta.Root != nil && len(schemaMeta.Root.Children) > 0 {
-		schemaTarget = schemaMeta.Root.Children[0]
-	} else {
-		schemaTarget = schemaMeta.Root
+	if schemaMeta.Root != nil {
+		for _, child := range schemaMeta.Root.Children {
+			// simple heuristic: match event type string to type name ignoring case
+			if strings.EqualFold(child.Key, eventType) {
+				schemaTarget = child
+				break
+			}
+		}
 	}
 
 	if schemaTarget == nil {
-		return nil, fmt.Errorf("schema %s has no type definitions", sub.SchemaName)
+		return nil, fmt.Errorf("schema %s has no matching type definition for event '%s'", sub.SchemaName, eventType)
 	}
 
 	projected := uir.Project(eventRoot, schemaTarget)
@@ -163,25 +169,11 @@ func (b *Broker) projectEvent(sub *Subscription, eventType string, data any) (an
 		projected = filterBySelection(projected, sub.RequestedFields)
 	}
 
-	// Step 4: Generate GraphQL SDL from the projected UIR.
-	graphqlBytes, err := codec.GenerateGraphQL(projected)
+	// Step 4: Generate actual JSON data from the projected UIR (Not Schema SDL).
+	jsonBytes, err := codec.GenerateJSON(projected)
 	if err != nil {
-		return nil, fmt.Errorf("GraphQL generation failed: %w", err)
+		return nil, fmt.Errorf("JSON payload generation failed: %w", err)
 	}
 
-	// Return the projected GraphQL as a structured response.
-	return map[string]any{
-		"__projected_schema": string(graphqlBytes),
-		"__source_fields":    countFields(projected),
-	}, nil
-}
-
-// countFields counts the number of fields in a UIR node tree (for diagnostics).
-func countFields(n *uir.Node) int {
-	count := 0
-	for _, child := range n.Children {
-		count++
-		count += countFields(child)
-	}
-	return count
+	return jsonBytes, nil
 }
