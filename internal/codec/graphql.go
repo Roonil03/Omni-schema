@@ -1,10 +1,12 @@
 package codec
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
 	"omni-schema/internal/lexer"
+	"omni-schema/internal/lower"
 	"omni-schema/internal/uir"
 )
 
@@ -48,4 +50,24 @@ func ParseGraphQLResult(data []byte) (*uir.Node, error) {
 
 	// Leverage the existing JSON parser for the inner data.
 	return lexer.ParseJSON(payload.Data)
+}
+
+// ParseGraphQL accepts either a GraphQL result envelope {"data":...} or GraphQL SDL.
+func ParseGraphQL(data []byte) (*uir.Node, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		n, err := ParseGraphQLResult(data)
+		if err == nil {
+			return n, nil
+		}
+	}
+	l := &lexer.GraphQLLexer{}
+	doc, err := l.Parse(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("graphql: not a result JSON or SDL: %v", err)
+	}
+	if doc == nil || len(doc.Definitions) == 0 {
+		return nil, fmt.Errorf("graphql: empty document")
+	}
+	return lower.LowerGraphQL(doc), nil
 }

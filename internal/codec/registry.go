@@ -62,7 +62,7 @@ func init() {
 	RegisterDecoder("capnproto", schemaDecoderFunc(ParseCapnProtoWithOptions))
 	RegisterDecoder("parquet", schemaDecoderFunc(ParseParquetWithOptions))
 	RegisterDecoder("hdf5", schemaDecoderFunc(ParseHDF5WithOptions))
-	RegisterDecoder("graphql", DecoderFunc(ParseGraphQLResult))
+	RegisterDecoder("graphql", DecoderFunc(ParseGraphQL))
 	RegisterDecoder("avro", schemaDecoderFunc(ParseAvroWithOptions))
 	RegisterDecoder("odata", schemaDecoderFunc(ParseODataWithOptions))
 

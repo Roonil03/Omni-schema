@@ -17,8 +17,5 @@ Design.md
 Implementation.md
 *.pdf
 
-# Ignore test files
-*_test.go
-
 # Testing artifacts
 testing_files/
