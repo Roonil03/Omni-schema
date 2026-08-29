@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -546,12 +547,16 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		opcode, payload, err := conn.ReadMessage()
-		if err != nil || opcode == network.OpClose {
-			if opcode == network.OpClose {
-				_ = conn.HandleCloseFrame(payload)
-			} else {
-				_ = conn.Close()
+		if err != nil {
+			var pe *network.ProtocolError
+			if errors.As(err, &pe) {
+				return // close frame already sent and TCP closed
 			}
+			_ = conn.Close()
+			return
+		}
+		if opcode == network.OpClose {
+			_ = conn.HandleCloseFrame(payload)
 			return
 		}
 
@@ -560,8 +565,8 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		var msg map[string]any
 		if err := json.Unmarshal(payload, &msg); err != nil {
-			conn.WriteMessage(network.OpText, []byte(`{"type":"error","payload":{"message":"invalid protocol frame (not JSON)"}}`))
-			conn.Close()
+			_ = conn.WriteMessage(network.OpText, []byte(`{"type":"error","payload":{"message":"invalid protocol frame (not JSON)"}}`))
+			_ = conn.CloseWithCode(int(network.CloseInvalidFramePayloadData), "invalid JSON")
 			return
 		}
 		switch msg["type"].(string) {
