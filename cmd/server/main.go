@@ -238,13 +238,14 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(header.Filename), "."))
-	rootNode, err := parseSchema(ext, body)
+	format := codec.NormalizeFormat(ext)
+	rootNode, err := parseSchema(format, body)
 	if err != nil {
 		http.Error(w, err.Error(), 422)
 		return
 	}
 
-	meta, err := registry.Default.Register(schemaName, ext, body, rootNode)
+	meta, err := registry.Default.Register(schemaName, format, body, rootNode)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Registration Error: %v", err), 500)
 		return
@@ -258,22 +259,22 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseSchema(ext string, body []byte) (*uir.Node, error) {
-	switch ext {
-	case "graphql", "gql":
+	switch codec.NormalizeFormat(ext) {
+	case "graphql":
 		l := &lexer.GraphQLLexer{}
 		astDoc, err := l.Parse(string(body))
 		if err != nil {
 			return nil, fmt.Errorf("GraphQL Parse Error: %v", err)
 		}
 		return lower.LowerGraphQL(astDoc), nil
-	case "proto":
+	case "protobuf":
 		l := &lexer.ProtoLexer{}
 		astDoc, err := l.Parse(string(body))
 		if err != nil {
 			return nil, fmt.Errorf("Protobuf Parse Error: %v", err)
 		}
 		return lower.LowerProtobuf(astDoc), nil
-	case "capnp", "capnproto":
+	case "capnproto":
 		l := &lexer.CapnProtoLexer{}
 		astDoc, err := l.Parse(string(body))
 		if err != nil {
@@ -540,7 +541,7 @@ func morphFormats(r *http.Request, uploadedFilename string) (source, target stri
 	if target == "" {
 		target = r.FormValue("target")
 	}
-	return source, target
+	return codec.NormalizeFormat(source), codec.NormalizeFormat(target)
 }
 
 func targetFileInfo(target string) (ext string, contentType string) {

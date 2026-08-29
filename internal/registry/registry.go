@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"omni-schema/internal/codec"
 	"omni-schema/internal/lexer"
 	"omni-schema/internal/lower"
 	"omni-schema/internal/uir"
@@ -318,15 +319,15 @@ func (r *Registry) LoadFromFile(filename string) error {
 }
 
 func rebuildRoot(meta *SchemaMetadata) (*uir.Node, error) {
-	switch meta.Format {
-	case "graphql", "gql":
+	switch codec.NormalizeFormat(meta.Format) {
+	case "graphql":
 		l := &lexer.GraphQLLexer{}
 		doc, err := l.Parse(string(meta.RawContent))
 		if err != nil {
 			return nil, err
 		}
 		return lower.LowerGraphQL(doc), nil
-	case "proto", "protobuf":
+	case "protobuf":
 		l := &lexer.ProtoLexer{}
 		doc, err := l.Parse(string(meta.RawContent))
 		if err != nil {
@@ -335,7 +336,7 @@ func rebuildRoot(meta *SchemaMetadata) (*uir.Node, error) {
 		return lower.LowerProtobuf(doc), nil
 	case "json", "avro", "odata":
 		return lexer.ParseJSON(meta.RawContent)
-	case "capnp", "capnproto":
+	case "capnproto":
 		l := &lexer.CapnProtoLexer{}
 		doc, err := l.Parse(string(meta.RawContent))
 		if err != nil {

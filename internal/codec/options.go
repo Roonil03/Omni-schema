@@ -53,6 +53,7 @@ func (f schemaEncoderFunc) EncodeWithOptions(node *uir.Node, opts Options) ([]by
 }
 
 func DecodePayload(format string, data []byte, opts Options) (*uir.Node, error) {
+	format = NormalizeFormat(format)
 	if RequiresExternalSchema(format) && opts.RequireType {
 		if opts.Schema == nil {
 			return nil, fmt.Errorf("%s decoding requires a registered schema", format)
@@ -75,6 +76,7 @@ func DecodePayload(format string, data []byte, opts Options) (*uir.Node, error) 
 }
 
 func EncodePayload(format string, node *uir.Node, opts Options) ([]byte, error) {
+	format = NormalizeFormat(format)
 	if RequiresExternalSchema(format) && opts.RequireType {
 		if opts.Schema == nil {
 			return nil, fmt.Errorf("%s encoding requires a registered schema", format)
