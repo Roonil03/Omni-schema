@@ -40,14 +40,14 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/system/schema", withCommon(schemaHandler))
-	mux.HandleFunc("/system/schema/activate", withCommon(requireWriteAuth(schemaActivateHandler)))
-	mux.HandleFunc("/system/schema/deprecate", withCommon(requireWriteAuth(schemaDeprecateHandler)))
-	mux.HandleFunc("/system/schema/diff", withCommon(schemaDiffHandler))
-	mux.HandleFunc("/morph/", withCommon(morphHandler))
-	mux.HandleFunc("/morph", withCommon(morphHandler))
+	mux.HandleFunc("/system/schema", withCommon(requireSensitiveAuth(schemaHandler)))
+	mux.HandleFunc("/system/schema/activate", withCommon(requireSensitiveAuth(schemaActivateHandler)))
+	mux.HandleFunc("/system/schema/deprecate", withCommon(requireSensitiveAuth(schemaDeprecateHandler)))
+	mux.HandleFunc("/system/schema/diff", withCommon(requireSensitiveAuth(schemaDiffHandler)))
+	mux.HandleFunc("/morph/", withCommon(requireSensitiveAuth(morphHandler)))
+	mux.HandleFunc("/morph", withCommon(requireSensitiveAuth(morphHandler)))
 	mux.HandleFunc("/graphql/subscriptions", subscriptionHandler)
-	mux.HandleFunc("/dev/events", withCommon(devEventHandler))
+	mux.HandleFunc("/dev/events", withCommon(requireSensitiveAuth(devEventHandler)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "metrics": telemetry.GetMetricsSnapshot()})
@@ -148,14 +148,39 @@ func writeAuthOK(r *http.Request) bool {
 	return r.Header.Get("X-API-Token") == tok
 }
 
-func requireWriteAuth(next http.HandlerFunc) http.HandlerFunc {
+func productionLocked() bool {
+	return os.Getenv("OMNI_ENV") == "production"
+}
+
+func requireSensitiveAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !writeAuthOK(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		if r.Method == http.MethodGet && !productionLocked() && os.Getenv("OMNI_API_TOKEN") == "" {
+			next(w, r)
 			return
+		}
+		if productionLocked() && os.Getenv("OMNI_API_TOKEN") == "" {
+			http.Error(w, "OMNI_API_TOKEN is required in production", http.StatusUnauthorized)
+			return
+		}
+		if os.Getenv("OMNI_API_TOKEN") != "" || productionLocked() {
+			if !writeAuthOK(r) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 		next(w, r)
 	}
+}
+
+func tenantKey(r *http.Request, name string) string {
+	t := r.Header.Get("X-Tenant-ID")
+	if t == "" {
+		t = r.URL.Query().Get("tenant")
+	}
+	if t == "" {
+		return name
+	}
+	return registry.Namespaced(t, name)
 }
 
 func readyHandler(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +199,7 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 
 func schemaHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		name := r.URL.Query().Get("name")
+		name := tenantKey(r, r.URL.Query().Get("name"))
 		vers := registry.Default.List(name)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(vers)
@@ -193,6 +218,7 @@ func schemaHandler(w http.ResponseWriter, r *http.Request) {
 	if schemaName == "" {
 		schemaName = "default"
 	}
+	schemaName = tenantKey(r, schemaName)
 
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
@@ -305,15 +331,39 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 	reqID := r.Header.Get("X-Request-ID")
 
 	schemaParam := r.URL.Query().Get("schema")
+	sourceSchemaParam := r.URL.Query().Get("sourceSchema")
+	targetSchemaParam := r.URL.Query().Get("targetSchema")
+	sourceType := r.URL.Query().Get("sourceType")
+	targetType := r.URL.Query().Get("targetType")
 	typeParam := r.URL.Query().Get("type")
-	var schemaMeta *registry.SchemaMetadata
-	if schemaParam != "" {
-		meta, ok := registry.Default.GetActive(schemaParam)
-		if !ok {
-			http.Error(w, fmt.Sprintf("Requested schema %s not found in registry", schemaParam), 404)
-			return
+	if sourceType == "" {
+		sourceType = typeParam
+	}
+	if targetType == "" {
+		targetType = typeParam
+	}
+	if sourceSchemaParam == "" {
+		sourceSchemaParam = schemaParam
+	}
+	if targetSchemaParam == "" {
+		targetSchemaParam = schemaParam
+	}
+
+	lookup := func(name string) (*registry.SchemaMetadata, bool) {
+		if name == "" {
+			return nil, false
 		}
-		schemaMeta = meta
+		return registry.Default.GetActive(tenantKey(r, name))
+	}
+	srcMeta, srcOK := lookup(sourceSchemaParam)
+	tgtMeta, tgtOK := lookup(targetSchemaParam)
+	if sourceSchemaParam != "" && !srcOK {
+		http.Error(w, fmt.Sprintf("source schema %s not found", sourceSchemaParam), 404)
+		return
+	}
+	if targetSchemaParam != "" && !tgtOK {
+		http.Error(w, fmt.Sprintf("target schema %s not found", targetSchemaParam), 404)
+		return
 	}
 
 	body, uploadedFilename, err := readMorphBody(w, r)
@@ -332,13 +382,13 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := codec.Options{TypeName: typeParam}
-	if schemaMeta != nil {
-		opts.Schema = schemaMeta.Root
+	decOpts := codec.Options{TypeName: sourceType, RequireType: codec.RequiresExternalSchema(source) && srcMeta != nil}
+	if srcMeta != nil {
+		decOpts.Schema = srcMeta.Root
 	}
 
 	t0 := time.Now()
-	dataNode, parseErr := codec.DecodePayload(source, body, opts)
+	dataNode, parseErr := codec.DecodePayload(source, body, decOpts)
 	telemetry.ObserveParse(time.Since(t0))
 	if parseErr != nil {
 		http.Error(w, fmt.Sprintf("Error parsing %s: %v", source, parseErr), 400)
@@ -347,19 +397,21 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 
 	outputNode := dataNode
 	report := &uir.ConversionReport{}
-	if schemaMeta != nil && schemaMeta.Root != nil {
-		schemaTarget := resolveMorphType(schemaMeta.Root, typeParam)
-		if schemaTarget == nil {
-			http.Error(w, "schema type not found; pass ?type=TypeName", 400)
+	if tgtMeta != nil && tgtMeta.Root != nil {
+		schemaTarget, err := uir.ResolvePayloadType(tgtMeta.Root, targetType)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
 			return
 		}
 		projOpts := uir.DefaultProjectOptions()
 		projOpts.UnknownFields = uir.UnknownFieldIgnore
 		projOpts.EmitNullForMissing = true
-		projOpts.SchemaRoot = schemaMeta.Root
+		projOpts.SchemaRoot = tgtMeta.Root
 		projOpts.Report = report
+		planKey := uir.PlanCacheKey(sourceSchemaParam, sourceType, targetSchemaParam, targetType, "", tgtMeta.Version)
+		plan := uir.GetOrCompilePlan(planKey, dataNode, schemaTarget, projOpts)
 		t1 := time.Now()
-		projected, err := uir.Project(dataNode, schemaTarget, projOpts)
+		projected, err := uir.ApplyPlan(dataNode, plan)
 		telemetry.ObserveConvert(time.Since(t1))
 		if err != nil {
 			telemetry.ConversionFailures.Add(1)
@@ -371,12 +423,17 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		outputNode = rootWrapper
 	}
 
+	encOpts := codec.Options{TypeName: targetType, RequireType: codec.RequiresExternalSchema(target) && tgtMeta != nil}
+	if tgtMeta != nil {
+		encOpts.Schema = tgtMeta.Root
+	}
+
 	t2 := time.Now()
 	var out []byte
 	if target == "graphql" {
 		out, err = codec.GenerateGraphQLSDL(outputNode)
 	} else {
-		out, err = codec.EncodePayload(target, outputNode, opts)
+		out, err = codec.EncodePayload(target, outputNode, encOpts)
 	}
 	telemetry.ObserveEncode(time.Since(t2))
 	if err != nil {
@@ -516,26 +573,47 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 	telemetry.WebSocketConns.Add(1)
 	defer telemetry.WebSocketConns.Add(^uint64(0))
 
+	if productionLocked() || os.Getenv("OMNI_API_TOKEN") != "" {
+		if productionLocked() && os.Getenv("OMNI_API_TOKEN") == "" {
+			http.Error(w, "OMNI_API_TOKEN is required in production", http.StatusUnauthorized)
+			return
+		}
+		if !writeAuthOK(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	conn, err := network.UpgradeToWebSocket(w, r)
 	if err != nil {
 		http.Error(w, "WebSocket Upgrade Failed", 400)
 		return
 	}
-	conn.SetDeadlines(60*time.Second, 30*time.Second, 0)
+	conn.SetDeadlines(60*time.Second, 30*time.Second, 20*time.Second)
+	pingStop := make(chan struct{})
+	defer close(pingStop)
+	conn.StartPinger(pingStop)
 
-	schemaParam := r.URL.Query().Get("schema")
-	if schemaParam == "" {
-		schemaParam = "default"
+	schemaName := r.URL.Query().Get("schema")
+	if schemaName == "" {
+		schemaName = "default"
 	}
+	schemaParam := tenantKey(r, schemaName)
 	targetParam := r.URL.Query().Get("target")
 	if targetParam == "" {
 		targetParam = "graphql"
 	}
+	sourceFmt := r.URL.Query().Get("source")
+	sourceType := r.URL.Query().Get("sourceType")
+	targetType := r.URL.Query().Get("targetType")
 
 	meta, ok := registry.Default.GetActive(schemaParam)
 	schemaVersion := "unknown"
 	if ok {
 		schemaVersion = meta.Version
+	} else if r.URL.Query().Get("schema") != "" {
+		http.Error(w, "schema not found", http.StatusNotFound)
+		return
 	}
 
 	activeSubs := make(map[string]*stream.Subscription)
@@ -569,7 +647,8 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 			_ = conn.CloseWithCode(int(network.CloseInvalidFramePayloadData), "invalid JSON")
 			return
 		}
-		switch msg["type"].(string) {
+		msgType, _ := msg["type"].(string)
+		switch msgType {
 		case "connection_init":
 			conn.WriteMessage(network.OpText, []byte(`{"type":"connection_ack"}`))
 		case "subscribe", "start":
@@ -582,41 +661,67 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 				delete(activeSubs, subID)
 			}
 
-			var requestedFields []ast.GraphQLSelection
-			fragments := map[string]*ast.GraphQLFragmentDefinition{}
-			responseKey := ""
-			eventType := ""
-			opName := ""
 			payloadObj, _ := msg["payload"].(map[string]any)
-			if payloadObj != nil {
-				opName, _ = payloadObj["operationName"].(string)
-				query, _ := payloadObj["query"].(string)
-				if query != "" {
-					l := &lexer.GraphQLLexer{}
-					doc, err := l.Parse(query)
-					if err == nil {
-						for _, d := range doc.Definitions {
-							if f, ok := d.(*ast.GraphQLFragmentDefinition); ok {
-								fragments[f.Name] = f
-							}
-						}
-						op, err := stream.SelectOperation(doc, opName)
-						if err != nil {
-							b, _ := json.Marshal(map[string]any{"type": "error", "id": subID, "payload": map[string]string{"message": err.Error()}})
-							conn.WriteMessage(network.OpText, b)
-							continue
-						}
-						requestedFields = op.Selections
-						if len(op.Selections) > 0 {
-							if f, ok := op.Selections[0].(*ast.GraphQLField); ok {
-								eventType = f.Name
-								responseKey = f.Name
-								if f.Alias != "" {
-									responseKey = f.Alias
-								}
-							}
-						}
+			if payloadObj == nil {
+				b, _ := json.Marshal(map[string]any{"type": "error", "id": subID, "payload": map[string]string{"message": "missing payload"}})
+				conn.WriteMessage(network.OpText, b)
+				continue
+			}
+			query, _ := payloadObj["query"].(string)
+			if query == "" {
+				b, _ := json.Marshal(map[string]any{"type": "error", "id": subID, "payload": map[string]string{"message": "missing query"}})
+				conn.WriteMessage(network.OpText, b)
+				continue
+			}
+			opName, _ := payloadObj["operationName"].(string)
+			l := &lexer.GraphQLLexer{}
+			doc, err := l.Parse(query)
+			if err != nil {
+				b, _ := json.Marshal(map[string]any{"type": "error", "id": subID, "payload": map[string]string{"message": err.Error()}})
+				conn.WriteMessage(network.OpText, b)
+				continue
+			}
+			fragments := map[string]*ast.GraphQLFragmentDefinition{}
+			for _, d := range doc.Definitions {
+				if f, ok := d.(*ast.GraphQLFragmentDefinition); ok {
+					fragments[f.Name] = f
+				}
+			}
+			op, err := stream.SelectSubscription(doc, opName)
+			if err != nil {
+				b, _ := json.Marshal(map[string]any{"type": "error", "id": subID, "payload": map[string]string{"message": err.Error()}})
+				conn.WriteMessage(network.OpText, b)
+				continue
+			}
+			var schemaRoot *uir.Node
+			if meta != nil {
+				schemaRoot = meta.Root
+			}
+			rootFields, err := stream.RootFieldsFromOp(op, schemaRoot)
+			if err != nil {
+				b, _ := json.Marshal(map[string]any{"type": "error", "id": subID, "payload": map[string]string{"message": err.Error()}})
+				conn.WriteMessage(network.OpText, b)
+				continue
+			}
+			if schemaRoot != nil {
+				valid := true
+				for _, rf := range rootFields {
+					ret, err := stream.ReturnTypeForEvent(schemaRoot, rf.Name)
+					if err != nil {
+						b, _ := json.Marshal(map[string]any{"type": "error", "id": subID, "payload": map[string]string{"message": err.Error()}})
+						conn.WriteMessage(network.OpText, b)
+						valid = false
+						break
 					}
+					if err := stream.ValidateSelections(ret, rf.Selections, fragments); err != nil {
+						b, _ := json.Marshal(map[string]any{"type": "error", "id": subID, "payload": map[string]string{"message": err.Error()}})
+						conn.WriteMessage(network.OpText, b)
+						valid = false
+						break
+					}
+				}
+				if !valid {
+					continue
 				}
 			}
 
@@ -625,11 +730,21 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 			sub.Conn = conn
 			sub.SchemaName = schemaParam
 			sub.SchemaVersion = schemaVersion
-			sub.RequestedFields = requestedFields
+			sub.RequestedFields = op.Selections
 			sub.Fragments = fragments
+			sub.RootFields = rootFields
 			sub.TargetFormat = targetParam
-			sub.ResponseKey = responseKey
-			sub.EventType = eventType
+			sub.SourceFormat = sourceFmt
+			sub.SourceType = sourceType
+			sub.TargetType = targetType
+			if meta != nil {
+				sub.SourceSchema = meta.Root
+				sub.TargetSchema = meta.Root
+			}
+			if len(rootFields) == 1 {
+				sub.EventType = rootFields[0].Name
+				sub.ResponseKey = rootFields[0].Alias
+			}
 			sub.OpName = opName
 			sub.CorrelationID = r.Header.Get("X-Request-ID")
 			if sub.CorrelationID == "" {
@@ -637,6 +752,8 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if n := r.URL.Query().Get("batchSize"); n != "" {
 				fmt.Sscanf(n, "%d", &sub.BatchSize)
+			} else if codec.IsContainerFormat(targetParam) {
+				sub.BatchSize = 16
 			}
 
 			stream.DefaultBroker.AddSubscription(sub)
@@ -644,12 +761,7 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 				for {
 					select {
 					case p := <-s.Queue:
-						opCode := network.OpText
-						if s.TargetFormat != "graphql" && s.TargetFormat != "json" && s.TargetFormat != "odata" {
-							opCode = network.OpText
-						}
-						_ = opCode
-						if err := s.Conn.WriteMessage(network.OpText, p); err != nil {
+						if err := s.Conn.WriteMessage(p.Opcode, p.Payload); err != nil {
 							return
 						}
 					case <-s.Closed:
@@ -665,6 +777,12 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 				delete(activeSubs, subID)
 				conn.WriteMessage(network.OpText, []byte(fmt.Sprintf(`{"type":"complete","id":%q}`, subID)))
 			}
+		case "":
+			b, _ := json.Marshal(map[string]any{"type": "error", "payload": map[string]string{"message": "missing message type"}})
+			conn.WriteMessage(network.OpText, b)
+		default:
+			b, _ := json.Marshal(map[string]any{"type": "error", "payload": map[string]string{"message": "unknown message type: " + msgType}})
+			conn.WriteMessage(network.OpText, b)
 		}
 	}
 }

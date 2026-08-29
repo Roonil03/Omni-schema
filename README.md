@@ -150,29 +150,39 @@ Every “supported” decode/encode path has automated round-trip coverage in `i
 | Format | Decode | Encode | Schema | HTTP morph | Streaming | Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
 | JSON | yes | yes | optional | yes | 1 event / text frame | complete for objects/arrays |
-| MessagePack | yes | yes | no | yes | 1 message / frame (JSON envelope + base64) | complete schemaless subset |
-| Protobuf | yes | yes | required for faithful types | yes | 1 message / frame | schema-driven; subset `.proto` language |
-| GraphQL | result JSON | SDL (morph) / result (stream) | SDL | yes | GraphQL-over-WS envelope | selection/projection subset, not a full execution engine |
-| Avro | OCF | OCF | embedded + optional UIR | yes | batchable container | Object Container File, null codec |
-| OData | JSON payload | JSON payload | EDM annotations | yes | JSON envelope | **OData JSON response subset**, not a query service |
-| Cap'n Proto | yes | yes | optional | yes | 1 message / frame | single-segment struct/text/list subset |
-| Parquet | yes | yes | optional | yes | **batched artifact** | Omni Parquet subset v1: `PAR1`, 1 row group, PLAIN pages |
-| HDF5 | yes | yes | optional | yes | **batched/chunked artifact** | signature + superblock v0 + contiguous named datasets |
+| MessagePack | yes | yes | no | yes | 1 **OpBinary** envelope | complete schemaless subset |
+| Protobuf | yes | yes | required for faithful types | yes | 1 **OpBinary** envelope | schema-driven; subset `.proto` language |
+| GraphQL | result JSON | SDL (morph) / result (stream) | SDL | yes | GraphQL-over-WS **text** envelope | subscription selection/projection; not a full execution engine |
+| Avro | OCF | OCF | embedded + optional UIR | yes | **OpBinary** batched OCF | Object Container File, null codec |
+| OData | JSON payload | JSON payload | EDM annotations | yes | JSON **text** envelope | **OData JSON response subset** (`@odata.context`, `@odata.type`, `value`) — not `$filter`/`$expand` |
+| Cap'n Proto | yes | yes | schema for faithful layout | yes | 1 **OpBinary** envelope | single-segment struct/Text/List subset |
+| Parquet | yes | yes | optional | yes | **OpBinary** batched file | Omni Parquet subset v1 (`PAR1`, PLAIN pages) — not parquet-cli certified |
+| HDF5 | yes | yes | optional | yes | **OpBinary** batched file | signature + superblock v0 + contiguous datasets — not h5dump certified |
 
 ### Streaming semantics
 
-- **Delivery**: at-most-once / best-effort. Queues are bounded; overflow uses DropOldest. No replay buffer.
+- **Delivery**: **at-most-once / best-effort**. Bounded queues; DropOldest on overflow. Event IDs are deduplicated per subscription.
+- **Replay/resume**: **none**. `cursor` in envelopes is informational only; reconnecting clients start live.
 - **Ordering**: per subscription, in publish order, until a drop occurs.
-- **JSON**: one event per text frame (transport envelope).
-- **GraphQL**: UIR → GraphQL result `{data:{<alias or field>: ...}}` → `{"type":"next","id","payload"}` envelope.
-- **Protobuf / MessagePack / Cap'n Proto / Avro (single)**: binary payload is base64 inside a JSON metadata envelope (`format`, `schema`, `schemaVersion`, `eventId`).
-- **Parquet / HDF5 / Avro container**: set `batchSize` on the subscription URL; the broker flushes a batch artifact rather than one-file-per-event.
-- **Schema version**: the connection binds the **active** schema version at subscribe time. If that version is later deleted, events for that subscription are skipped (`SchemaMissing`). Deprecation is recorded; incompatible live mutation is not hot-swapped onto existing sockets.
-- **`/dev/events`**: development injection. Disabled when `OMNI_ENV=production` unless `OMNI_DEV_EVENTS=1`. Supports `?source=` for non-JSON payloads.
+- **JSON / OData**: one event per **text** frame (transport envelope).
+- **GraphQL**: UIR → GraphQL result `{data:{<alias>: ...}}` → `{"type":"next","id","payload"}` text envelope. Multi-root subscriptions fan out by matching `eventType` to each root field name. Operations must be `subscription`; parse errors and unknown fields are rejected.
+- **Binary targets** (Protobuf, MessagePack, Cap'n Proto, Avro, Parquet, HDF5): **OpBinary** frames with an `OMNI` header (`eventId`, `format`, `schemaVersion`) then raw codec bytes — **not** Base64-in-JSON.
+- **Parquet / HDF5 / Avro**: default `batchSize=16` (override with `?batchSize=`); a batch encodes one container file.
+- **Schema version**: bound at subscribe time. If that version is deleted, the subscription receives an error and is closed.
+- **Liveness**: server pings every 20s; RFC close handshake on `OpClose`.
+- **`/dev/events`**: `?source=` selects any advertised decoder. Disabled in production unless `OMNI_DEV_EVENTS=1`.
 
 ### Schema-dependent codecs
 
-Pass `?schema=name&type=TypeName` on `/morph` so Protobuf, Cap'n Proto, Avro, Parquet, and HDF5 decoders/encoders receive an explicit type instead of guessing from `Children[0]`.
+- `?sourceSchema=` / `?targetSchema=` and `?sourceType=` / `?targetType=` (or shared `?schema=` / `?type=`).
+- Missing named types return an error (no `Children[0]` fallback). Ambiguous schemas require `type=`.
+- Protobuf and Cap'n Proto use the registered schema as the transformation contract when provided.
+- Persisted registry reconstruction **fails closed** for unsupported formats.
+
+### Auth and tenants
+
+- `OMNI_ENV=production` requires `OMNI_API_TOKEN` on morph, schema, events, and subscriptions.
+- Optional `X-Tenant-ID` namespaces schema names (`tenant/name`).
 
 ### Environment
 
