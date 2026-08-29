@@ -411,6 +411,27 @@ func (c *Conn) WriteMessage(opcode Opcode, payload []byte) error {
 	return c.writeMessageLocked(opcode, payload)
 }
 
+// StartPinger writes OpPing frames until stop is closed.
+func (c *Conn) StartPinger(stop <-chan struct{}) {
+	if c == nil || c.PingInterval <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(c.PingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				if err := c.WriteMessage(OpPing, nil); err != nil {
+					return
+				}
+			}
+		}
+	}()
+}
+
 func (c *Conn) writeMessageLocked(opcode Opcode, payload []byte) error {
 	if c.closed {
 		return net.ErrClosed

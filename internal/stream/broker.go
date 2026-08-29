@@ -1,17 +1,18 @@
 package stream
 
 import (
-	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"omni-schema/internal/ast"
 	"omni-schema/internal/codec"
+	"omni-schema/internal/network"
 	"omni-schema/internal/registry"
 	"omni-schema/internal/uir"
 )
@@ -20,10 +21,13 @@ type Broker struct {
 	mu            sync.RWMutex
 	subscriptions map[*Subscription]bool
 	eventSeq      atomic.Uint64
-	order         string // per-subscription
+	order         string
 }
 
-var DefaultBroker = NewBroker()
+var (
+	ErrBuffering  = errors.New("batch buffering")
+	DefaultBroker = NewBroker()
+)
 
 func NewBroker() *Broker {
 	return &Broker{
@@ -39,10 +43,10 @@ func (b *Broker) AddSubscription(sub *Subscription) {
 		sub.Closed = make(chan struct{})
 	}
 	if sub.Queue == nil {
-		sub.Queue = make(chan []byte, 100)
+		sub.Queue = make(chan Frame, 100)
 	}
 	b.subscriptions[sub] = true
-	log.Printf("Added subscription %s bound to schema %s:%s (format: %s) delivery=%s", sub.ID, sub.SchemaName, sub.SchemaVersion, sub.TargetFormat, DeliveryMode)
+	log.Printf("Added subscription %s schema=%s:%s format=%s delivery=%s replay=%s", sub.ID, sub.SchemaName, sub.SchemaVersion, sub.TargetFormat, DeliveryMode, ReplayMode)
 }
 
 func (b *Broker) RemoveSubscription(sub *Subscription) {
@@ -80,11 +84,6 @@ func (b *Broker) PublishEvent(evt Event) {
 	if evt.Cursor == "" {
 		evt.Cursor = evt.ID
 	}
-	node, err := codec.DecodePayload(evt.SourceFormat, evt.Payload, codec.Options{})
-	if err != nil {
-		log.Printf("Failed to decode event payload: %v", err)
-		return
-	}
 
 	b.mu.RLock()
 	subs := make([]*Subscription, 0, len(b.subscriptions))
@@ -99,62 +98,70 @@ func (b *Broker) PublishEvent(evt Event) {
 			continue
 		default:
 		}
+		if !sub.Remember(evt.ID) {
+			continue
+		}
 		if !schemaStillValid(sub) {
+			b.enqueue(sub, Frame{Opcode: network.OpText, Payload: errorJSON(sub.ID, "schema version missing or deleted")})
+			sub.Close()
 			continue
 		}
-		payloadBytes, err := b.buildSubscriptionPayload(sub, evt, node)
+		srcFmt := evt.SourceFormat
+		if sub.SourceFormat != "" {
+			srcFmt = sub.SourceFormat
+		}
+		decOpts := codec.Options{Schema: sub.SourceSchema, TypeName: sub.SourceType}
+		node, err := codec.DecodePayload(srcFmt, evt.Payload, decOpts)
 		if err != nil {
-			log.Printf("Failed to build payload for sub %s: %v", sub.ID, err)
+			log.Printf("decode event for sub %s: %v", sub.ID, err)
 			continue
 		}
-		if shouldBatch(sub.TargetFormat) && sub.BatchSize > 1 {
-			if flushed := sub.enqueueBatch(payloadBytes); flushed != nil {
-				b.enqueue(sub, flushed)
-			}
+		rf, ok := sub.matchesEvent(evt.Type)
+		if !ok {
 			continue
 		}
-		b.enqueue(sub, payloadBytes)
+		frame, err := b.buildFrame(sub, evt, node, rf)
+		if errors.Is(err, ErrBuffering) {
+			continue
+		}
+		if err != nil {
+			log.Printf("build payload for sub %s: %v", sub.ID, err)
+			continue
+		}
+		b.enqueue(sub, frame)
 	}
 }
 
-func shouldBatch(format string) bool {
-	switch format {
-	case "parquet", "hdf5", "avro":
-		return true
-	default:
-		return false
-	}
+func errorJSON(id, msg string) []byte {
+	b, _ := json.Marshal(map[string]any{"id": id, "type": "error", "payload": map[string]string{"message": msg}})
+	return b
 }
 
-func (s *Subscription) enqueueBatch(item []byte) []byte {
+func (s *Subscription) appendBatch(n *uir.Node) []*uir.Node {
 	s.batchMu.Lock()
 	defer s.batchMu.Unlock()
-	s.batch = append(s.batch, item)
-	if len(s.batch) >= s.BatchSize {
-		out, _ := json.Marshal(map[string]any{
-			"type":  "batch",
-			"count": len(s.batch),
-			"items": s.batch,
-		})
-		s.batch = nil
+	s.batchNodes = append(s.batchNodes, n)
+	if len(s.batchNodes) >= s.BatchSize {
+		out := s.batchNodes
+		s.batchNodes = nil
 		return out
 	}
 	return nil
 }
 
-func (b *Broker) enqueue(sub *Subscription, payloadBytes []byte) {
+func (b *Broker) enqueue(sub *Subscription, frame Frame) {
 	select {
-	case sub.Queue <- payloadBytes:
+	case sub.Queue <- frame:
 	default:
 		select {
 		case <-sub.Queue:
-			log.Printf("Backpressure: dropped oldest event for sub %s (at-most-once)", sub.ID)
+			log.Printf("Backpressure: dropped oldest event for sub %s (%s)", sub.ID, DeliveryMode)
 		default:
 		}
 		select {
-		case sub.Queue <- payloadBytes:
+		case sub.Queue <- frame:
 		default:
-			log.Printf("Backpressure: dropped event for sub %s (queue still full)", sub.ID)
+			log.Printf("Backpressure: dropped event for sub %s", sub.ID)
 		}
 	}
 }
@@ -174,50 +181,94 @@ func schemaStillValid(sub *Subscription) bool {
 	return true
 }
 
-func (b *Broker) buildSubscriptionPayload(sub *Subscription, evt Event, eventRoot *uir.Node) ([]byte, error) {
-	var finalNode *uir.Node
+func (b *Broker) buildFrame(sub *Subscription, evt Event, eventRoot *uir.Node, rf RootField) (Frame, error) {
+	finalNode := eventRoot
 	var err error
-
 	if sub.SchemaVersion != "unknown" && sub.SchemaVersion != "" {
-		finalNode, err = b.projectEventToNode(sub, evt.Type, eventRoot)
+		finalNode, err = b.projectEventToNode(sub, rf, eventRoot)
 		if err != nil {
-			return nil, err
+			return Frame{}, err
 		}
-	} else {
-		finalNode = eventRoot
 	}
 
-	opts := codec.Options{}
-	if sub.SchemaVersion != "" && sub.SchemaVersion != "unknown" {
+	if codec.IsContainerFormat(sub.TargetFormat) && sub.BatchSize > 1 {
+		if flushed := sub.appendBatch(finalNode); flushed != nil {
+			arr := uir.NewNode(uir.TypeArray, "Root", nil)
+			for _, n := range flushed {
+				arr.AddChild(n)
+			}
+			finalNode = arr
+		} else {
+			return Frame{}, ErrBuffering
+		}
+	}
+
+	opts := codec.Options{Schema: sub.TargetSchema, TypeName: sub.TargetType}
+	if opts.Schema == nil && sub.SchemaVersion != "" && sub.SchemaVersion != "unknown" {
 		if meta, ok := registry.Default.GetVersion(sub.SchemaName, sub.SchemaVersion); ok {
 			opts.Schema = meta.Root
 		}
 	}
 
-	encodedBytes, err := codec.EncodePayload(sub.TargetFormat, finalNode, opts)
+	encoded, err := codec.EncodePayload(sub.TargetFormat, finalNode, opts)
 	if err != nil {
-		return nil, fmt.Errorf("encoding failed for %s: %v", sub.TargetFormat, err)
+		return Frame{}, err
 	}
 
-	switch sub.TargetFormat {
-	case "graphql":
-		return wrapGraphQLTransport(sub, evt, encodedBytes)
-	case "json":
-		return wrapJSONTransport(sub, evt, encodedBytes)
-	default:
-		return wrapBinaryTransport(sub, evt, encodedBytes)
+	if isTextFormat(sub.TargetFormat) {
+		if sub.TargetFormat == "graphql" {
+			payload, err := wrapGraphQLTransport(sub, evt, encoded, rf)
+			return Frame{Opcode: network.OpText, Payload: payload}, err
+		}
+		payload, err := wrapJSONTransport(sub, evt, encoded)
+		return Frame{Opcode: network.OpText, Payload: payload}, err
 	}
+
+	body := encodeBinaryEnvelope(sub, evt, encoded)
+	return Frame{Opcode: network.OpBinary, Payload: body}, nil
 }
 
-func wrapGraphQLTransport(sub *Subscription, evt Event, encoded []byte) ([]byte, error) {
-	var gqlPayload map[string]any
-	if err := json.Unmarshal(encoded, &gqlPayload); err != nil {
-		gqlPayload = map[string]any{"data": json.RawMessage(encoded)}
+func encodeBinaryEnvelope(sub *Subscription, evt Event, body []byte) []byte {
+	hdr, _ := json.Marshal(map[string]string{
+		"eventId":       evt.ID,
+		"cursor":        evt.Cursor,
+		"eventType":     evt.Type,
+		"format":        sub.TargetFormat,
+		"schema":        sub.SchemaName,
+		"schemaVersion": sub.SchemaVersion,
+	})
+	out := make([]byte, 0, 7+len(hdr)+len(body))
+	out = append(out, 'O', 'M', 'N', 'I', 1)
+	var ln [2]byte
+	binary.BigEndian.PutUint16(ln[:], uint16(len(hdr)))
+	out = append(out, ln[:]...)
+	out = append(out, hdr...)
+	out = append(out, body...)
+	return out
+}
+
+func DecodeBinaryEnvelope(frame []byte) (hdr map[string]string, body []byte, err error) {
+	if len(frame) < 7 || string(frame[:4]) != "OMNI" {
+		return nil, nil, fmt.Errorf("not an omni binary envelope")
 	}
+	n := int(binary.BigEndian.Uint16(frame[5:7]))
+	if 7+n > len(frame) {
+		return nil, nil, fmt.Errorf("truncated binary header")
+	}
+	hdr = map[string]string{}
+	if err := json.Unmarshal(frame[7:7+n], &hdr); err != nil {
+		return nil, nil, err
+	}
+	return hdr, frame[7+n:], nil
+}
+
+func wrapGraphQLTransport(sub *Subscription, evt Event, encoded []byte, rf RootField) ([]byte, error) {
+	var gqlPayload map[string]any
+	_ = json.Unmarshal(encoded, &gqlPayload)
 	dataMap, _ := gqlPayload["data"].(map[string]any)
-	key := sub.ResponseKey
+	key := rf.Alias
 	if key == "" {
-		key = evt.Type
+		key = rf.Name
 	}
 	inner := any(dataMap)
 	if dataMap != nil {
@@ -225,20 +276,13 @@ func wrapGraphQLTransport(sub *Subscription, evt Event, encoded []byte) ([]byte,
 			inner = v
 		}
 	}
-	result := map[string]any{
-		"data": map[string]any{
-			key: inner,
-		},
-	}
+	result := map[string]any{"data": map[string]any{key: inner}}
 	envelope := map[string]any{
 		"id":      sub.ID,
 		"type":    "next",
 		"payload": result,
 		"extensions": map[string]any{
-			"eventId":       evt.ID,
-			"cursor":        evt.Cursor,
-			"schemaVersion": sub.SchemaVersion,
-			"correlationId": sub.CorrelationID,
+			"eventId": evt.ID, "cursor": evt.Cursor, "schemaVersion": sub.SchemaVersion,
 		},
 	}
 	return json.Marshal(envelope)
@@ -249,118 +293,53 @@ func wrapJSONTransport(sub *Subscription, evt Event, encoded []byte) ([]byte, er
 		"id":   sub.ID,
 		"type": "next",
 		"payload": map[string]any{
-			"data": map[string]any{
-				evt.Type: json.RawMessage(encoded),
-			},
+			"data": map[string]any{evt.Type: json.RawMessage(encoded)},
 		},
-		"extensions": map[string]any{
-			"eventId": evt.ID,
-			"cursor":  evt.Cursor,
-		},
+		"extensions": map[string]any{"eventId": evt.ID, "cursor": evt.Cursor},
 	}
 	return json.Marshal(envelope)
 }
 
-func wrapBinaryTransport(sub *Subscription, evt Event, encoded []byte) ([]byte, error) {
-	meta := map[string]string{
-		"format":        sub.TargetFormat,
-		"schema":        sub.SchemaName,
-		"schemaVersion": sub.SchemaVersion,
-		"eventId":       evt.ID,
-		"eventType":     evt.Type,
-		"encoding":      "base64",
-	}
-	for k, v := range sub.BinaryMeta {
-		meta[k] = v
-	}
-	envelope := map[string]any{
-		"id":       sub.ID,
-		"type":     "next",
-		"format":   sub.TargetFormat,
-		"metadata": meta,
-		"payload":  base64.StdEncoding.EncodeToString(encoded),
-	}
-	return json.Marshal(envelope)
-}
-
-func (b *Broker) projectEventToNode(sub *Subscription, eventType string, eventRoot *uir.Node) (*uir.Node, error) {
+func (b *Broker) projectEventToNode(sub *Subscription, rf RootField, eventRoot *uir.Node) (*uir.Node, error) {
 	schemaMeta, found := registry.Default.GetVersion(sub.SchemaName, sub.SchemaVersion)
 	if !found {
-		return nil, fmt.Errorf("schema %s version %s not found in registry", sub.SchemaName, sub.SchemaVersion)
+		return nil, fmt.Errorf("schema %s version %s not found", sub.SchemaName, sub.SchemaVersion)
 	}
-
-	schemaTarget := resolveEventType(schemaMeta.Root, eventType)
-	if schemaTarget == nil {
-		return nil, fmt.Errorf("schema %s has no matching type definition for event '%s'", sub.SchemaName, eventType)
+	var schemaTarget *uir.Node
+	var err error
+	if sub.TargetFormat == "graphql" {
+		schemaTarget, err = ReturnTypeForEvent(schemaMeta.Root, rf.Name)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		name := sub.TargetType
+		if name == "" {
+			name = rf.Name
+		}
+		schemaTarget, err = uir.ResolvePayloadType(schemaMeta.Root, name)
+		if err != nil {
+			return nil, err
+		}
 	}
-
 	opts := uir.DefaultProjectOptions()
 	opts.UnknownFields = uir.UnknownFieldIgnore
 	opts.EmitNullForMissing = true
 	opts.SchemaRoot = schemaMeta.Root
-	projected, err := uir.Project(eventRoot, schemaTarget, opts)
+	key := uir.PlanCacheKey(sub.SchemaName, rf.Name, sub.SchemaName, schemaTarget.Key, sub.SchemaVersion, sub.SchemaVersion)
+	plan := uir.GetOrCompilePlan(key, eventRoot, schemaTarget, opts)
+	projected, err := uir.ApplyPlan(eventRoot, plan)
 	if err != nil {
-		return nil, fmt.Errorf("schema validation failed: %w", err)
+		return nil, err
 	}
-
-	if len(sub.RequestedFields) > 0 {
-		projected = filterBySelection(projected, sub.RequestedFields, sub.Fragments)
+	sels := rf.Selections
+	if len(sels) == 0 {
+		sels = sub.RequestedFields
+	}
+	if len(sels) > 0 {
+		projected = filterBySelection(projected, sels, sub.Fragments)
 	}
 	return projected, nil
-}
-
-func resolveEventType(root *uir.Node, eventType string) *uir.Node {
-	if root == nil {
-		return nil
-	}
-	if direct := root.FindNamedType(eventType); direct != nil && direct.Annotation("kind") != "service" {
-		if direct.Type == uir.TypeMap || direct.Type == uir.TypeInterface || direct.Type == uir.TypeUnion {
-			return direct
-		}
-	}
-	var subscription *uir.Node
-	for _, child := range root.Children {
-		if strings.EqualFold(child.Key, "Subscription") || child.Annotation("kind") == "schema" && child.Annotation("subscription") != "" {
-			if strings.EqualFold(child.Key, "Subscription") {
-				subscription = child
-				break
-			}
-		}
-	}
-	if subscription == nil {
-		for _, child := range root.Children {
-			if strings.EqualFold(child.Key, "Subscription") {
-				subscription = child
-			}
-		}
-	}
-	if subscription != nil {
-		if field := subscription.ChildByKey(eventType); field != nil {
-			named := field.Annotation("gql_type")
-			if named != "" {
-				if t := root.FindNamedType(named); t != nil {
-					return t
-				}
-			}
-			return field
-		}
-	}
-	for _, child := range root.Children {
-		if strings.EqualFold(child.Key, eventType) {
-			return child
-		}
-	}
-	return nil
-}
-
-func ResolveType(root *uir.Node, typeName string) *uir.Node {
-	if root == nil {
-		return nil
-	}
-	if typeName == "" {
-		return nil
-	}
-	return root.FindNamedType(typeName)
 }
 
 func SelectOperation(doc *ast.GraphQLDocument, operationName string) (*ast.GraphQLOperation, error) {

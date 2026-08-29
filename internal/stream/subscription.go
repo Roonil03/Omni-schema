@@ -7,17 +7,15 @@ import (
 
 	"omni-schema/internal/ast"
 	"omni-schema/internal/network"
+	"omni-schema/internal/uir"
 )
-
-// DeliveryMode is at-most-once / best-effort. The bounded queue uses DropOldest.
-const DeliveryMode = "at-most-once/best-effort"
 
 type SchemaLifecycle string
 
 const (
-	SchemaBound       SchemaLifecycle = "bound"
-	SchemaMissing     SchemaLifecycle = "missing"
-	SchemaDeprecated  SchemaLifecycle = "deprecated"
+	SchemaBound        SchemaLifecycle = "bound"
+	SchemaMissing      SchemaLifecycle = "missing"
+	SchemaDeprecated   SchemaLifecycle = "deprecated"
 	SchemaIncompatible SchemaLifecycle = "incompatible"
 )
 
@@ -28,40 +26,38 @@ type Subscription struct {
 	SchemaVersion   string
 	RequestedFields []ast.GraphQLSelection
 	Fragments       map[string]*ast.GraphQLFragmentDefinition
+	RootFields      []RootField
 	ResponseKey     string
 	EventType       string
-	Queue           chan []byte
+	Queue           chan Frame
 	Closed          chan struct{}
 	closeOnce       sync.Once
 	TargetFormat    string
 	SourceFormat    string
-	SchemaVersionID string
+	SourceSchema    *uir.Node
+	TargetSchema    *uir.Node
+	SourceType      string
+	TargetType      string
 	CorrelationID   string
-	BinaryMeta      map[string]string
 	BatchSize       int
 	FlushInterval   time.Duration
 	batchMu         sync.Mutex
-	batch           [][]byte
-	batchNodes      []*batchItem
+	batchNodes      []*uir.Node
 	OpName          string
 	Lifecycle       SchemaLifecycle
-
-	seq atomic.Uint64
-}
-
-type batchItem struct {
-	eventType string
-	payload   []byte
+	Seen            map[string]struct{}
+	seenMu          sync.Mutex
+	Tenant          string
+	seq             atomic.Uint64
 }
 
 func NewSubscription() *Subscription {
 	return &Subscription{
-		Queue:         make(chan []byte, 100),
+		Queue:         make(chan Frame, 100),
 		Closed:        make(chan struct{}),
 		Fragments:     map[string]*ast.GraphQLFragmentDefinition{},
-		BinaryMeta:    map[string]string{},
+		Seen:          map[string]struct{}{},
 		BatchSize:     1,
-		FlushInterval: 0,
 		Lifecycle:     SchemaBound,
 	}
 }
@@ -75,21 +71,33 @@ func (s *Subscription) Close() {
 	})
 }
 
-func (s *Subscription) NextEventID() string {
-	n := s.seq.Add(1)
-	return s.ID + ":" + itoa(n)
+func (s *Subscription) Remember(id string) bool {
+	if id == "" {
+		return true
+	}
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	if _, ok := s.Seen[id]; ok {
+		return false
+	}
+	if len(s.Seen) > 4096 {
+		s.Seen = map[string]struct{}{}
+	}
+	s.Seen[id] = struct{}{}
+	return true
 }
 
-func itoa(n uint64) string {
-	if n == 0 {
-		return "0"
+func (s *Subscription) matchesEvent(eventType string) (RootField, bool) {
+	if len(s.RootFields) == 0 {
+		if s.EventType == "" || s.EventType == eventType {
+			return RootField{Name: eventType, Alias: s.ResponseKey}, true
+		}
+		return RootField{}, false
 	}
-	var a [20]byte
-	i := len(a)
-	for n > 0 {
-		i--
-		a[i] = byte('0' + n%10)
-		n /= 10
+	for _, rf := range s.RootFields {
+		if rf.Name == eventType {
+			return rf, true
+		}
 	}
-	return string(a[i:])
+	return RootField{}, false
 }
