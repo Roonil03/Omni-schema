@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 const StorageFormatVersion = 2
 
 type SchemaMetadata struct {
+	Tenant     string    `json:"tenant,omitempty"`
 	Name       string    `json:"name"`
 	Version    string    `json:"version"`
 	Format     string    `json:"format"`
@@ -57,6 +59,13 @@ func (r *Registry) Ready() bool {
 	return r.loaded || r.StoragePath == ""
 }
 
+func Namespaced(tenant, name string) string {
+	if tenant == "" {
+		tenant = "_"
+	}
+	return tenant + "/" + name
+}
+
 func (r *Registry) Register(name, format string, rawContent []byte, root *uir.Node) (*SchemaMetadata, error) {
 	if name == "" {
 		return nil, fmt.Errorf("schema name cannot be empty")
@@ -88,6 +97,11 @@ func (r *Registry) Register(name, format string, rawContent []byte, root *uir.No
 		Root:       root,
 		Timestamp:  time.Now(),
 		Active:     true,
+	}
+	if i := strings.Index(name, "/"); i >= 0 {
+		meta.Tenant = name[:i]
+	} else {
+		meta.Tenant = "_"
 	}
 
 	prevActive, hasPrevActive := r.active[name]
@@ -208,48 +222,16 @@ func (r *Registry) List(name string) []*SchemaMetadata {
 }
 
 func Diff(a, b *uir.Node) map[string][]string {
+	changes := uir.DiffRecursive(a, b)
 	res := map[string][]string{"added": {}, "removed": {}, "changed": {}}
-	if a == nil || b == nil {
-		return res
-	}
-	ai := map[string]*uir.Node{}
-	bi := map[string]*uir.Node{}
-	for _, c := range a.Children {
-		ai[c.Key] = c
-	}
-	for _, c := range b.Children {
-		bi[c.Key] = c
-	}
-	for k := range bi {
-		if _, ok := ai[k]; !ok {
-			res["added"] = append(res["added"], k)
-		}
-	}
-	for k, av := range ai {
-		bv, ok := bi[k]
-		if !ok {
-			res["removed"] = append(res["removed"], k)
-			continue
-		}
-		if av.Type != bv.Type || av.Annotation("gql_type") != bv.Annotation("gql_type") {
-			res["changed"] = append(res["changed"], k)
-		}
+	for _, c := range changes {
+		res[c.Kind] = append(res[c.Kind], c.Path)
 	}
 	return res
 }
 
 func Compatibility(oldN, newN *uir.Node) string {
-	d := Diff(oldN, newN)
-	if len(d["removed"]) == 0 && len(d["changed"]) == 0 {
-		if len(d["added"]) == 0 {
-			return "full"
-		}
-		return "backward"
-	}
-	if len(d["added"]) == 0 && len(d["changed"]) == 0 {
-		return "forward"
-	}
-	return "breaking"
+	return uir.CompatibilityClass(oldN, newN)
 }
 
 func (r *Registry) SaveToFile(filename string) error {
@@ -318,7 +300,14 @@ func (r *Registry) LoadFromFile(filename string) error {
 		r.active = map[string]string{}
 	}
 	for _, meta := range wrap.Schemas {
-		meta.Root = rebuildRoot(meta)
+		root, err := rebuildRoot(meta)
+		if err != nil {
+			return fmt.Errorf("schema %s@%s reconstruction failed: %w", meta.Name, meta.Version, err)
+		}
+		if root == nil {
+			return fmt.Errorf("schema %s@%s reconstruction produced no UIR (format %s)", meta.Name, meta.Version, meta.Format)
+		}
+		meta.Root = root
 		r.schemas[meta.Name] = append(r.schemas[meta.Name], meta)
 		if _, ok := r.active[meta.Name]; !ok {
 			r.active[meta.Name] = meta.Version
@@ -328,31 +317,32 @@ func (r *Registry) LoadFromFile(filename string) error {
 	return nil
 }
 
-func rebuildRoot(meta *SchemaMetadata) *uir.Node {
+func rebuildRoot(meta *SchemaMetadata) (*uir.Node, error) {
 	switch meta.Format {
 	case "graphql", "gql":
 		l := &lexer.GraphQLLexer{}
 		doc, err := l.Parse(string(meta.RawContent))
-		if err == nil {
-			return lower.LowerGraphQL(doc)
+		if err != nil {
+			return nil, err
 		}
+		return lower.LowerGraphQL(doc), nil
 	case "proto", "protobuf":
 		l := &lexer.ProtoLexer{}
 		doc, err := l.Parse(string(meta.RawContent))
-		if err == nil {
-			return lower.LowerProtobuf(doc)
+		if err != nil {
+			return nil, err
 		}
-	case "json", "avro":
-		n, err := lexer.ParseJSON(meta.RawContent)
-		if err == nil {
-			return n
-		}
+		return lower.LowerProtobuf(doc), nil
+	case "json", "avro", "odata":
+		return lexer.ParseJSON(meta.RawContent)
 	case "capnp", "capnproto":
 		l := &lexer.CapnProtoLexer{}
 		doc, err := l.Parse(string(meta.RawContent))
-		if err == nil {
-			return lower.LowerCapnProto(doc)
+		if err != nil {
+			return nil, err
 		}
+		return lower.LowerCapnProto(doc), nil
+	default:
+		return nil, fmt.Errorf("unsupported persisted schema format %q", meta.Format)
 	}
-	return nil
 }
