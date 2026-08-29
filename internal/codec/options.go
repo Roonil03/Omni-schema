@@ -6,13 +6,12 @@ import (
 	"omni-schema/internal/uir"
 )
 
-// Options supplies schema and policy context to codecs that cannot decode
-// faithfully from the byte stream alone.
 type Options struct {
-	Schema     *uir.Node
-	TypeName   string
-	Bytes      uir.BytesPolicy
-	Lossiness  uir.LossinessPolicy
+	Schema      *uir.Node
+	TypeName    string
+	Bytes       uir.BytesPolicy
+	Lossiness   uir.LossinessPolicy
+	RequireType bool
 }
 
 func (o Options) TypeSchema() *uir.Node {
@@ -22,20 +21,13 @@ func (o Options) TypeSchema() *uir.Node {
 	if o.TypeName == "" {
 		return o.Schema
 	}
-	if found := o.Schema.FindNamedType(o.TypeName); found != nil {
-		return found
-	}
-	return o.Schema
+	return o.Schema.FindNamedType(o.TypeName)
 }
 
-// SchemaAwareDecoder is implemented by codecs whose decode path depends on an
-// external schema (Protobuf, Cap'n Proto, Avro, Parquet, HDF5, GraphQL).
 type SchemaAwareDecoder interface {
 	DecodeWithOptions(data []byte, opts Options) (*uir.Node, error)
 }
 
-// SchemaAwareEncoder is implemented by codecs that need schema/type metadata
-// to emit a correct wire layout.
 type SchemaAwareEncoder interface {
 	EncodeWithOptions(node *uir.Node, opts Options) ([]byte, error)
 }
@@ -60,8 +52,18 @@ func (f schemaEncoderFunc) EncodeWithOptions(node *uir.Node, opts Options) ([]by
 	return f(node, opts)
 }
 
-// DecodePayload looks up a decoder and, when possible, supplies schema context.
 func DecodePayload(format string, data []byte, opts Options) (*uir.Node, error) {
+	if RequiresExternalSchema(format) && opts.RequireType {
+		if opts.Schema == nil {
+			return nil, fmt.Errorf("%s decoding requires a registered schema", format)
+		}
+		if _, err := uir.ResolvePayloadType(opts.Schema, opts.TypeName); err != nil {
+			return nil, err
+		}
+	}
+	if opts.TypeName != "" && opts.Schema != nil && opts.Schema.FindNamedType(opts.TypeName) == nil {
+		return nil, fmt.Errorf("schema type %q not found", opts.TypeName)
+	}
 	dec, err := GetDecoder(format)
 	if err != nil {
 		return nil, err
@@ -72,8 +74,18 @@ func DecodePayload(format string, data []byte, opts Options) (*uir.Node, error) 
 	return dec.Decode(data)
 }
 
-// EncodePayload looks up an encoder and, when possible, supplies schema context.
 func EncodePayload(format string, node *uir.Node, opts Options) ([]byte, error) {
+	if RequiresExternalSchema(format) && opts.RequireType {
+		if opts.Schema == nil {
+			return nil, fmt.Errorf("%s encoding requires a registered schema", format)
+		}
+		if _, err := uir.ResolvePayloadType(opts.Schema, opts.TypeName); err != nil {
+			return nil, err
+		}
+	}
+	if opts.TypeName != "" && opts.Schema != nil && opts.Schema.FindNamedType(opts.TypeName) == nil {
+		return nil, fmt.Errorf("schema type %q not found", opts.TypeName)
+	}
 	enc, err := GetEncoder(format)
 	if err != nil {
 		return nil, err
@@ -85,14 +97,17 @@ func EncodePayload(format string, node *uir.Node, opts Options) ([]byte, error) 
 }
 
 func requireType(opts Options, fallback *uir.Node) *uir.Node {
-	if t := opts.TypeSchema(); t != nil && t != opts.Schema {
-		return t
+	if opts.TypeName != "" {
+		if opts.Schema == nil {
+			return fallback
+		}
+		return opts.Schema.FindNamedType(opts.TypeName)
 	}
-	if opts.Schema != nil && len(opts.Schema.Children) == 1 && opts.TypeName == "" {
-		return opts.Schema.Children[0]
-	}
-	if t := opts.TypeSchema(); t != nil {
-		return t
+	if opts.Schema != nil {
+		t, err := uir.ResolvePayloadType(opts.Schema, "")
+		if err == nil && t != nil {
+			return t
+		}
 	}
 	return fallback
 }

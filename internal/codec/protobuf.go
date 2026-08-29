@@ -19,6 +19,9 @@ func GenerateProtobufWithOptions(n *uir.Node, opts Options) ([]byte, error) {
 		return nil, nil
 	}
 	schema := requireType(opts, n)
+	if opts.TypeName != "" && opts.Schema != nil && schema == nil {
+		return nil, fmt.Errorf("schema type %q not found", opts.TypeName)
+	}
 	if schema != nil && schema.Type == uir.TypeMap && n.Type == uir.TypeMap {
 		return encodeProtoMessage(n, schema)
 	}
@@ -270,6 +273,9 @@ func ParseProtobuf(data []byte) (*uir.Node, error) {
 
 func ParseProtobufWithOptions(data []byte, opts Options) (*uir.Node, error) {
 	schema := requireType(opts, nil)
+	if opts.TypeName != "" && opts.Schema != nil && schema == nil {
+		return nil, fmt.Errorf("schema type %q not found", opts.TypeName)
+	}
 	root := uir.NewNode(uir.TypeMap, "Root", nil)
 	if schema != nil && schema.Key != "" && schema.Key != "proto_root" && schema.Key != "graphql_root" {
 		root.Key = schema.Key

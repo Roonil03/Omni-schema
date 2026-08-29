@@ -27,6 +27,9 @@ func GenerateCapnProtoWithOptions(n *uir.Node, opts Options) ([]byte, error) {
 		return []byte{0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, nil
 	}
 	schema := requireType(opts, n)
+	if opts.TypeName != "" && opts.Schema != nil && schema == nil {
+		return nil, fmt.Errorf("schema type %q not found", opts.TypeName)
+	}
 	seg, err := encodeCapnpStruct(n, schema)
 	if err != nil {
 		return nil, err
