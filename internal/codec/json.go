@@ -1,36 +1,37 @@
 package codec
 
 import (
+	"encoding/base64"
 	"encoding/json"
 
 	"omni-schema/internal/uir"
 )
 
-// GenerateJSON takes a UIR Node graph and synthesizes a valid JSON byte stream.
 func GenerateJSON(n *uir.Node) ([]byte, error) {
-	// Reconstruct a map[string]any representation from the UIR graph
-	// then marshal it into standard JSON.
-	
 	if n == nil {
 		return []byte("null"), nil
 	}
-
 	result := uirToInterface(n)
 	return json.MarshalIndent(result, "", "  ")
 }
 
 func uirToInterface(n *uir.Node) any {
-	if n.Type == uir.TypeNull {
+	if n == nil || n.Type == uir.TypeNull || n.Presence == uir.PresenceNull {
+		return nil
+	}
+	if n.Presence == uir.PresenceMissing {
 		return nil
 	}
 	if n.Type == uir.TypeMap {
 		m := make(map[string]any)
 		for _, child := range n.Children {
+			if child.Presence == uir.PresenceMissing {
+				continue
+			}
 			m[child.Key] = uirToInterface(child)
 		}
 		return m
 	}
-	
 	if n.Type == uir.TypeArray {
 		var arr []any
 		for _, child := range n.Children {
@@ -38,7 +39,12 @@ func uirToInterface(n *uir.Node) any {
 		}
 		return arr
 	}
-
-	// For scalars, return the actual underlying value directly
+	if n.Type == uir.TypeBytes {
+		b, _ := n.Value.([]byte)
+		return base64.StdEncoding.EncodeToString(b)
+	}
+	if n.Type == uir.TypeEnum {
+		return n.Value
+	}
 	return n.Value
 }

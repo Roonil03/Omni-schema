@@ -56,26 +56,24 @@ func GetDecoder(name string) (Decoder, error) {
 }
 
 func init() {
-	// Register the built-in JSON lexer as the JSON decoder.
 	RegisterDecoder("json", DecoderFunc(lexer.ParseJSON))
-	RegisterDecoder("protobuf", DecoderFunc(ParseProtobuf))
+	RegisterDecoder("protobuf", schemaDecoderFunc(ParseProtobufWithOptions))
 	RegisterDecoder("msgpack", DecoderFunc(ParseMessagePack))
-	RegisterDecoder("capnproto", DecoderFunc(ParseCapnProto))
-	RegisterDecoder("parquet", DecoderFunc(ParseParquet))
-	RegisterDecoder("hdf5", DecoderFunc(ParseHDF5))
+	RegisterDecoder("capnproto", schemaDecoderFunc(ParseCapnProtoWithOptions))
+	RegisterDecoder("parquet", schemaDecoderFunc(ParseParquetWithOptions))
+	RegisterDecoder("hdf5", schemaDecoderFunc(ParseHDF5WithOptions))
 	RegisterDecoder("graphql", DecoderFunc(ParseGraphQLResult))
-	RegisterDecoder("avro", DecoderFunc(ParseAvro))
-	RegisterDecoder("odata", DecoderFunc(ParseOData))
+	RegisterDecoder("avro", schemaDecoderFunc(ParseAvroWithOptions))
+	RegisterDecoder("odata", schemaDecoderFunc(ParseODataWithOptions))
 
-	// Register all existing built-in encoders
 	RegisterEncoder("graphql", EncoderFunc(GenerateGraphQLResult))
 	RegisterEncoder("graphql_sdl", EncoderFunc(GenerateGraphQLSDL))
-	RegisterEncoder("protobuf", EncoderFunc(GenerateProtobuf))
+	RegisterEncoder("protobuf", schemaEncoderFunc(GenerateProtobufWithOptions))
 	RegisterEncoder("msgpack", EncoderFunc(GenerateMessagePack))
-	RegisterEncoder("parquet", EncoderFunc(GenerateParquet))
-	RegisterEncoder("capnproto", EncoderFunc(GenerateCapnProto))
-	RegisterEncoder("hdf5", EncoderFunc(GenerateHDF5))
+	RegisterEncoder("parquet", schemaEncoderFunc(GenerateParquetWithOptions))
+	RegisterEncoder("capnproto", schemaEncoderFunc(GenerateCapnProtoWithOptions))
+	RegisterEncoder("hdf5", schemaEncoderFunc(GenerateHDF5WithOptions))
 	RegisterEncoder("json", EncoderFunc(GenerateJSON))
-	RegisterEncoder("avro", EncoderFunc(GenerateAvro))
-	RegisterEncoder("odata", EncoderFunc(GenerateOData))
+	RegisterEncoder("avro", schemaEncoderFunc(GenerateAvroWithOptions))
+	RegisterEncoder("odata", schemaEncoderFunc(GenerateODataWithOptions))
 }

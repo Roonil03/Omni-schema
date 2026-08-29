@@ -1,43 +1,65 @@
 package ast
 
-// ProtoFile represents a parsed .proto file.
 type ProtoFile struct {
 	Syntax   string
 	Package  string
+	Imports  []string
+	Options  map[string]string
 	Messages []*ProtoMessage
+	Enums    []*ProtoEnum
 	Services []*ProtoService
 }
 
-// ProtoMessage represents a message definition in protobuf.
 type ProtoMessage struct {
-	Name   string
-	Fields []*ProtoField
-	Oneofs []*ProtoOneof
+	Name     string
+	Fields   []*ProtoField
+	Oneofs   []*ProtoOneof
+	Enums    []*ProtoEnum
+	Nested   []*ProtoMessage
+	Reserved []string
+	Maps     []*ProtoMapField
 }
 
-// ProtoField represents a single field in a message.
 type ProtoField struct {
 	Repeated bool
+	Optional bool
+	Required bool
 	Type     string
 	Name     string
 	Tag      int
+	Options  map[string]string
 }
 
-// ProtoOneof represents a oneof union in protobuf.
+type ProtoMapField struct {
+	KeyType   string
+	ValueType string
+	Name      string
+	Tag       int
+}
+
 type ProtoOneof struct {
 	Name   string
 	Fields []*ProtoField
 }
 
-// ProtoService represents an RPC service.
+type ProtoEnum struct {
+	Name   string
+	Values []*ProtoEnumValue
+}
+
+type ProtoEnumValue struct {
+	Name   string
+	Number int
+}
+
 type ProtoService struct {
 	Name string
 	RPCs []*ProtoRPC
 }
 
-// ProtoRPC represents an rpc method within a service.
 type ProtoRPC struct {
 	Name     string
 	Request  string
 	Response string
+	Options  map[string]string
 }

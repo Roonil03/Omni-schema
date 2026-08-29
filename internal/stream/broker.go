@@ -1,53 +1,48 @@
 package stream
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"omni-schema/internal/ast"
 	"omni-schema/internal/codec"
-	"omni-schema/internal/network"
 	"omni-schema/internal/registry"
 	"omni-schema/internal/uir"
 )
 
-// Broker manages active subscriptions and event routing. When a registered schema
-// is bound to a subscription, events are projected through the UIR against the
-// subscriber's schema version before being serialised to the target format.
 type Broker struct {
 	mu            sync.RWMutex
 	subscriptions map[*Subscription]bool
+	eventSeq      atomic.Uint64
+	order         string // per-subscription
 }
 
-type Subscription struct {
-	ID              string
-	Conn            *network.Conn
-	SchemaName      string
-	SchemaVersion   string
-	RequestedFields []ast.GraphQLSelection
-	Queue           chan []byte
-	Closed          chan struct{}
-	TargetFormat    string
-	SourceFormat    string
-}
-
-// DefaultBroker is the global event broker.
 var DefaultBroker = NewBroker()
 
 func NewBroker() *Broker {
 	return &Broker{
 		subscriptions: make(map[*Subscription]bool),
+		order:         "per-subscription",
 	}
 }
 
 func (b *Broker) AddSubscription(sub *Subscription) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if sub.Closed == nil {
+		sub.Closed = make(chan struct{})
+	}
+	if sub.Queue == nil {
+		sub.Queue = make(chan []byte, 100)
+	}
 	b.subscriptions[sub] = true
-	log.Printf("Added subscription %s bound to schema %s:%s (format: %s)", sub.ID, sub.SchemaName, sub.SchemaVersion, sub.TargetFormat)
+	log.Printf("Added subscription %s bound to schema %s:%s (format: %s) delivery=%s", sub.ID, sub.SchemaName, sub.SchemaVersion, sub.TargetFormat, DeliveryMode)
 }
 
 func (b *Broker) RemoveSubscription(sub *Subscription) {
@@ -55,20 +50,37 @@ func (b *Broker) RemoveSubscription(sub *Subscription) {
 	defer b.mu.Unlock()
 	if _, ok := b.subscriptions[sub]; ok {
 		delete(b.subscriptions, sub)
-		close(sub.Closed)
-		log.Printf("Removed subscription %s", sub.ID)
 	}
+	sub.Close()
 }
 
-// Publish decodes an incoming event using the registry and routes it to all active subscribers.
 func (b *Broker) Publish(sourceFormat string, eventType string, rawData []byte) {
-	decoder, err := codec.GetDecoder(sourceFormat)
-	if err != nil {
-		log.Printf("Unsupported source format %s: %v", sourceFormat, err)
-		return
-	}
+	b.PublishEvent(Event{
+		ID:           fmt.Sprintf("evt-%d", b.eventSeq.Add(1)),
+		Type:         eventType,
+		SourceFormat: sourceFormat,
+		Payload:      rawData,
+		Time:         time.Now(),
+	})
+}
 
-	eventRoot, err := decoder.Decode(rawData)
+type Event struct {
+	ID           string
+	Type         string
+	SourceFormat string
+	Payload      []byte
+	Time         time.Time
+	Cursor       string
+}
+
+func (b *Broker) PublishEvent(evt Event) {
+	if evt.ID == "" {
+		evt.ID = fmt.Sprintf("evt-%d", b.eventSeq.Add(1))
+	}
+	if evt.Cursor == "" {
+		evt.Cursor = evt.ID
+	}
+	node, err := codec.DecodePayload(evt.SourceFormat, evt.Payload, codec.Options{})
 	if err != nil {
 		log.Printf("Failed to decode event payload: %v", err)
 		return
@@ -82,141 +94,295 @@ func (b *Broker) Publish(sourceFormat string, eventType string, rawData []byte) 
 	b.mu.RUnlock()
 
 	for _, sub := range subs {
-		payloadBytes, err := b.buildSubscriptionPayload(sub, eventType, eventRoot)
+		select {
+		case <-sub.Closed:
+			continue
+		default:
+		}
+		if !schemaStillValid(sub) {
+			continue
+		}
+		payloadBytes, err := b.buildSubscriptionPayload(sub, evt, node)
 		if err != nil {
 			log.Printf("Failed to build payload for sub %s: %v", sub.ID, err)
 			continue
 		}
+		if shouldBatch(sub.TargetFormat) && sub.BatchSize > 1 {
+			if flushed := sub.enqueueBatch(payloadBytes); flushed != nil {
+				b.enqueue(sub, flushed)
+			}
+			continue
+		}
+		b.enqueue(sub, payloadBytes)
+	}
+}
 
+func shouldBatch(format string) bool {
+	switch format {
+	case "parquet", "hdf5", "avro":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Subscription) enqueueBatch(item []byte) []byte {
+	s.batchMu.Lock()
+	defer s.batchMu.Unlock()
+	s.batch = append(s.batch, item)
+	if len(s.batch) >= s.BatchSize {
+		out, _ := json.Marshal(map[string]any{
+			"type":  "batch",
+			"count": len(s.batch),
+			"items": s.batch,
+		})
+		s.batch = nil
+		return out
+	}
+	return nil
+}
+
+func (b *Broker) enqueue(sub *Subscription, payloadBytes []byte) {
+	select {
+	case sub.Queue <- payloadBytes:
+	default:
+		select {
+		case <-sub.Queue:
+			log.Printf("Backpressure: dropped oldest event for sub %s (at-most-once)", sub.ID)
+		default:
+		}
 		select {
 		case sub.Queue <- payloadBytes:
 		default:
-			// Queue is full, implement DropOldest backpressure
-			select {
-			case <-sub.Queue:
-				log.Printf("Backpressure: dropped oldest event for sub %s", sub.ID)
-			default:
-			}
-			// Retry send after making room
-			select {
-			case sub.Queue <- payloadBytes:
-			default:
-				log.Printf("Backpressure: dropped event for sub %s (queue still full)", sub.ID)
-			}
+			log.Printf("Backpressure: dropped event for sub %s (queue still full)", sub.ID)
 		}
 	}
 }
 
-// buildSubscriptionPayload constructs the response for a single subscriber, 
-// projecting the event data through the UIR and encoding to TargetFormat.
-func (b *Broker) buildSubscriptionPayload(sub *Subscription, eventType string, eventRoot *uir.Node) ([]byte, error) {
+func schemaStillValid(sub *Subscription) bool {
+	if sub.SchemaVersion == "" || sub.SchemaVersion == "unknown" {
+		return true
+	}
+	meta, ok := registry.Default.GetVersion(sub.SchemaName, sub.SchemaVersion)
+	if !ok || meta == nil {
+		sub.Lifecycle = SchemaMissing
+		return false
+	}
+	if meta.Deprecated {
+		sub.Lifecycle = SchemaDeprecated
+	}
+	return true
+}
+
+func (b *Broker) buildSubscriptionPayload(sub *Subscription, evt Event, eventRoot *uir.Node) ([]byte, error) {
 	var finalNode *uir.Node
 	var err error
 
-	if sub.SchemaVersion != "unknown" {
-		finalNode, err = b.projectEventToNode(sub, eventType, eventRoot)
+	if sub.SchemaVersion != "unknown" && sub.SchemaVersion != "" {
+		finalNode, err = b.projectEventToNode(sub, evt.Type, eventRoot)
 		if err != nil {
-			log.Printf("Projection failed for sub %s: %v", sub.ID, err)
 			return nil, err
 		}
 	} else {
 		finalNode = eventRoot
 	}
 
-	// Use generic encoder for the target format
-	encoder, err := codec.GetEncoder(sub.TargetFormat)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get encoder for target format %s: %v", sub.TargetFormat, err)
+	opts := codec.Options{}
+	if sub.SchemaVersion != "" && sub.SchemaVersion != "unknown" {
+		if meta, ok := registry.Default.GetVersion(sub.SchemaName, sub.SchemaVersion); ok {
+			opts.Schema = meta.Root
+		}
 	}
 
-	encodedBytes, err := encoder.Encode(finalNode)
+	encodedBytes, err := codec.EncodePayload(sub.TargetFormat, finalNode, opts)
 	if err != nil {
 		return nil, fmt.Errorf("encoding failed for %s: %v", sub.TargetFormat, err)
 	}
 
-	// If the target is graphql, wrap it in a subscription envelope
-	if sub.TargetFormat == "graphql" || sub.TargetFormat == "json" {
-		// GraphQL over WebSocket format requires an envelope
-		// Note: The GraphQLResult encoder returns {"data": {...}}
-		var resultData json.RawMessage
-		if sub.TargetFormat == "graphql" {
-			// Strip the {"data": ...} to fit in the graphql-ws envelope.
-			// Actually, GenerateGraphQLResult returns exactly {"data": {...}}, 
-			// so we can just embed it in the payload.
-			resultData = json.RawMessage(encodedBytes)
-		} else {
-			resultData = json.RawMessage(encodedBytes)
-		}
-		
-		envelope := map[string]any{
-			"id":   sub.ID,
-			"type": "next",
-			"payload": resultData,
-		}
-		
-		if sub.TargetFormat == "json" {
-			envelope["payload"] = map[string]any{"data": map[string]any{eventType: json.RawMessage(encodedBytes)}}
-		} else {
-			// For graphql, encodedBytes is already a JSON object {"data": ...}, we just need to wrap it inside the "payload" key
-			// Wait, the payload field in graphql-ws *is* the GraphQL response, i.e., {"data": {...}, "errors": [...]}.
-			// So `encodedBytes` is perfectly formatted to be the `payload` value.
-			var gqlPayload map[string]any
-			json.Unmarshal(encodedBytes, &gqlPayload)
-			
-			// We have to wrap it back in the top-level event type key
-			dataMap, ok := gqlPayload["data"].(map[string]any)
-			if ok {
-				newPayload := map[string]any{
-					"data": map[string]any{
-						eventType: dataMap,
-					},
-				}
-				envelope["payload"] = newPayload
-			} else {
-				envelope["payload"] = gqlPayload
-			}
-		}
-
-		return json.Marshal(envelope)
+	switch sub.TargetFormat {
+	case "graphql":
+		return wrapGraphQLTransport(sub, evt, encodedBytes)
+	case "json":
+		return wrapJSONTransport(sub, evt, encodedBytes)
+	default:
+		return wrapBinaryTransport(sub, evt, encodedBytes)
 	}
-
-	return encodedBytes, nil
 }
 
-// projectEventToNode retrieves the subscriber's bound schema from the registry, projects the
-// event UIR against the schema UIR, and returns the projected UIR Node.
+func wrapGraphQLTransport(sub *Subscription, evt Event, encoded []byte) ([]byte, error) {
+	var gqlPayload map[string]any
+	if err := json.Unmarshal(encoded, &gqlPayload); err != nil {
+		gqlPayload = map[string]any{"data": json.RawMessage(encoded)}
+	}
+	dataMap, _ := gqlPayload["data"].(map[string]any)
+	key := sub.ResponseKey
+	if key == "" {
+		key = evt.Type
+	}
+	inner := any(dataMap)
+	if dataMap != nil {
+		if v, ok := dataMap[evt.Type]; ok {
+			inner = v
+		}
+	}
+	result := map[string]any{
+		"data": map[string]any{
+			key: inner,
+		},
+	}
+	envelope := map[string]any{
+		"id":      sub.ID,
+		"type":    "next",
+		"payload": result,
+		"extensions": map[string]any{
+			"eventId":       evt.ID,
+			"cursor":        evt.Cursor,
+			"schemaVersion": sub.SchemaVersion,
+			"correlationId": sub.CorrelationID,
+		},
+	}
+	return json.Marshal(envelope)
+}
+
+func wrapJSONTransport(sub *Subscription, evt Event, encoded []byte) ([]byte, error) {
+	envelope := map[string]any{
+		"id":   sub.ID,
+		"type": "next",
+		"payload": map[string]any{
+			"data": map[string]any{
+				evt.Type: json.RawMessage(encoded),
+			},
+		},
+		"extensions": map[string]any{
+			"eventId": evt.ID,
+			"cursor":  evt.Cursor,
+		},
+	}
+	return json.Marshal(envelope)
+}
+
+func wrapBinaryTransport(sub *Subscription, evt Event, encoded []byte) ([]byte, error) {
+	meta := map[string]string{
+		"format":        sub.TargetFormat,
+		"schema":        sub.SchemaName,
+		"schemaVersion": sub.SchemaVersion,
+		"eventId":       evt.ID,
+		"eventType":     evt.Type,
+		"encoding":      "base64",
+	}
+	for k, v := range sub.BinaryMeta {
+		meta[k] = v
+	}
+	envelope := map[string]any{
+		"id":       sub.ID,
+		"type":     "next",
+		"format":   sub.TargetFormat,
+		"metadata": meta,
+		"payload":  base64.StdEncoding.EncodeToString(encoded),
+	}
+	return json.Marshal(envelope)
+}
+
 func (b *Broker) projectEventToNode(sub *Subscription, eventType string, eventRoot *uir.Node) (*uir.Node, error) {
 	schemaMeta, found := registry.Default.GetVersion(sub.SchemaName, sub.SchemaVersion)
 	if !found {
 		return nil, fmt.Errorf("schema %s version %s not found in registry", sub.SchemaName, sub.SchemaVersion)
 	}
 
-	var schemaTarget *uir.Node
-	if schemaMeta.Root != nil {
-		for _, child := range schemaMeta.Root.Children {
-			if strings.EqualFold(child.Key, eventType) {
-				schemaTarget = child
-				break
-			}
-		}
-	}
-
+	schemaTarget := resolveEventType(schemaMeta.Root, eventType)
 	if schemaTarget == nil {
 		return nil, fmt.Errorf("schema %s has no matching type definition for event '%s'", sub.SchemaName, eventType)
 	}
 
-	opts := uir.ProjectOptions{
-		UnknownFields:      uir.UnknownFieldIgnore,
-		EmitNullForMissing: true,
-	}
+	opts := uir.DefaultProjectOptions()
+	opts.UnknownFields = uir.UnknownFieldIgnore
+	opts.EmitNullForMissing = true
+	opts.SchemaRoot = schemaMeta.Root
 	projected, err := uir.Project(eventRoot, schemaTarget, opts)
 	if err != nil {
 		return nil, fmt.Errorf("schema validation failed: %w", err)
 	}
 
 	if len(sub.RequestedFields) > 0 {
-		projected = filterBySelection(projected, sub.RequestedFields)
+		projected = filterBySelection(projected, sub.RequestedFields, sub.Fragments)
 	}
-
 	return projected, nil
+}
+
+func resolveEventType(root *uir.Node, eventType string) *uir.Node {
+	if root == nil {
+		return nil
+	}
+	if direct := root.FindNamedType(eventType); direct != nil && direct.Annotation("kind") != "service" {
+		if direct.Type == uir.TypeMap || direct.Type == uir.TypeInterface || direct.Type == uir.TypeUnion {
+			return direct
+		}
+	}
+	var subscription *uir.Node
+	for _, child := range root.Children {
+		if strings.EqualFold(child.Key, "Subscription") || child.Annotation("kind") == "schema" && child.Annotation("subscription") != "" {
+			if strings.EqualFold(child.Key, "Subscription") {
+				subscription = child
+				break
+			}
+		}
+	}
+	if subscription == nil {
+		for _, child := range root.Children {
+			if strings.EqualFold(child.Key, "Subscription") {
+				subscription = child
+			}
+		}
+	}
+	if subscription != nil {
+		if field := subscription.ChildByKey(eventType); field != nil {
+			named := field.Annotation("gql_type")
+			if named != "" {
+				if t := root.FindNamedType(named); t != nil {
+					return t
+				}
+			}
+			return field
+		}
+	}
+	for _, child := range root.Children {
+		if strings.EqualFold(child.Key, eventType) {
+			return child
+		}
+	}
+	return nil
+}
+
+func ResolveType(root *uir.Node, typeName string) *uir.Node {
+	if root == nil {
+		return nil
+	}
+	if typeName == "" {
+		return nil
+	}
+	return root.FindNamedType(typeName)
+}
+
+func SelectOperation(doc *ast.GraphQLDocument, operationName string) (*ast.GraphQLOperation, error) {
+	var ops []*ast.GraphQLOperation
+	for _, d := range doc.Definitions {
+		if op, ok := d.(*ast.GraphQLOperation); ok {
+			ops = append(ops, op)
+		}
+	}
+	if len(ops) == 0 {
+		return nil, fmt.Errorf("no operation in document")
+	}
+	if operationName != "" {
+		for _, op := range ops {
+			if op.Name == operationName {
+				return op, nil
+			}
+		}
+		return nil, fmt.Errorf("operation %q not found", operationName)
+	}
+	if len(ops) > 1 {
+		return nil, fmt.Errorf("multiple operations present; provide operationName")
+	}
+	return ops[0], nil
 }

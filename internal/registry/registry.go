@@ -15,31 +15,35 @@ import (
 	"omni-schema/internal/uir"
 )
 
-// SchemaMetadata represents a registered schema in the UIR format.
+const StorageFormatVersion = 2
+
 type SchemaMetadata struct {
 	Name       string    `json:"name"`
 	Version    string    `json:"version"`
 	Format     string    `json:"format"`
 	RawContent []byte    `json:"raw_content"`
-	Root       *uir.Node `json:"-"` // Rebuilt on load
+	Root       *uir.Node `json:"-"`
 	Timestamp  time.Time `json:"timestamp"`
+	Deprecated bool      `json:"deprecated,omitempty"`
+	Active     bool      `json:"active,omitempty"`
 }
 
-// Registry manages in-memory schema registrations atomically.
+type persistedRegistry struct {
+	FormatVersion int               `json:"format_version"`
+	Active        map[string]string `json:"active"`
+	Schemas       []*SchemaMetadata `json:"schemas"`
+}
+
 type Registry struct {
-	mu sync.RWMutex
-	// schemas maps a schema name to an ordered list of versions
-	schemas map[string][]*SchemaMetadata
-	// active maps a schema name to its latest version hash
-	active map[string]string
-	// StoragePath is the file path for persistence
+	mu          sync.RWMutex
+	schemas     map[string][]*SchemaMetadata
+	active      map[string]string
 	StoragePath string
+	loaded      bool
 }
 
-// Default is the global registry instance.
 var Default = NewRegistry()
 
-// NewRegistry initializes a new schema registry.
 func NewRegistry() *Registry {
 	return &Registry{
 		schemas: make(map[string][]*SchemaMetadata),
@@ -47,27 +51,26 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register stores a parsed schema. It hashes the canonical UIR to identify identical versions.
-// If the content is identical to the active version, it returns the existing one to avoid duplicates.
-// It transactionally writes to disk if StoragePath is set.
+func (r *Registry) Ready() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.loaded || r.StoragePath == ""
+}
+
 func (r *Registry) Register(name, format string, rawContent []byte, root *uir.Node) (*SchemaMetadata, error) {
 	if name == "" {
 		return nil, fmt.Errorf("schema name cannot be empty")
 	}
-
-	// Semantic hash: hash the UIR JSON instead of the raw string to ignore whitespace/formatting
 	canonicalBytes, err := json.Marshal(root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal UIR for semantic hash: %w", err)
 	}
-
 	hash := sha256.Sum256(canonicalBytes)
 	versionHash := hex.EncodeToString(hash[:])
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Check if this exact version is already the active one
 	if activeHash, ok := r.active[name]; ok && activeHash == versionHash {
 		versions := r.schemas[name]
 		for _, v := range versions {
@@ -84,16 +87,18 @@ func (r *Registry) Register(name, format string, rawContent []byte, root *uir.No
 		RawContent: rawContent,
 		Root:       root,
 		Timestamp:  time.Now(),
+		Active:     true,
 	}
 
 	prevActive, hasPrevActive := r.active[name]
-
+	for _, v := range r.schemas[name] {
+		v.Active = false
+	}
 	r.schemas[name] = append(r.schemas[name], meta)
 	r.active[name] = versionHash
 
 	if r.StoragePath != "" {
 		if err := r.saveToFileLocked(r.StoragePath); err != nil {
-			// Rollback memory state
 			r.schemas[name] = r.schemas[name][:len(r.schemas[name])-1]
 			if hasPrevActive {
 				r.active[name] = prevActive
@@ -103,40 +108,28 @@ func (r *Registry) Register(name, format string, rawContent []byte, root *uir.No
 			return nil, fmt.Errorf("persistence failed, rolling back: %w", err)
 		}
 	}
-
 	return meta, nil
 }
 
-// GetActive retrieves the latest version of a registered schema.
 func (r *Registry) GetActive(name string) (*SchemaMetadata, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	activeHash, ok := r.active[name]
 	if !ok {
 		return nil, false
 	}
-	
-	versions := r.schemas[name]
-	for _, v := range versions {
+	for _, v := range r.schemas[name] {
 		if v.Version == activeHash {
 			return v, true
 		}
 	}
-
 	return nil, false
 }
 
-// GetVersion retrieves a specific version of a registered schema.
 func (r *Registry) GetVersion(name, version string) (*SchemaMetadata, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	versions, exists := r.schemas[name]
-	if !exists {
-		return nil, false
-	}
-	for _, v := range versions {
+	for _, v := range r.schemas[name] {
 		if v.Version == version {
 			return v, true
 		}
@@ -144,7 +137,121 @@ func (r *Registry) GetVersion(name, version string) (*SchemaMetadata, bool) {
 	return nil, false
 }
 
-// SaveToFile persists the registry metadata and raw schemas to a JSON file.
+func (r *Registry) Activate(name, version string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	found := false
+	for _, v := range r.schemas[name] {
+		if v.Version == version {
+			found = true
+			v.Active = true
+			v.Deprecated = false
+		} else {
+			v.Active = false
+		}
+	}
+	if !found {
+		return fmt.Errorf("version not found")
+	}
+	r.active[name] = version
+	if r.StoragePath != "" {
+		return r.saveToFileLocked(r.StoragePath)
+	}
+	return nil
+}
+
+func (r *Registry) Deprecate(name, version string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, v := range r.schemas[name] {
+		if v.Version == version {
+			v.Deprecated = true
+			if r.StoragePath != "" {
+				return r.saveToFileLocked(r.StoragePath)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("version not found")
+}
+
+func (r *Registry) DeleteVersion(name, version string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	vers := r.schemas[name]
+	out := vers[:0]
+	for _, v := range vers {
+		if v.Version != version {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		delete(r.schemas, name)
+		delete(r.active, name)
+	} else {
+		r.schemas[name] = out
+		if r.active[name] == version {
+			r.active[name] = out[len(out)-1].Version
+			out[len(out)-1].Active = true
+		}
+	}
+	if r.StoragePath != "" {
+		return r.saveToFileLocked(r.StoragePath)
+	}
+	return nil
+}
+
+func (r *Registry) List(name string) []*SchemaMetadata {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]*SchemaMetadata(nil), r.schemas[name]...)
+}
+
+func Diff(a, b *uir.Node) map[string][]string {
+	res := map[string][]string{"added": {}, "removed": {}, "changed": {}}
+	if a == nil || b == nil {
+		return res
+	}
+	ai := map[string]*uir.Node{}
+	bi := map[string]*uir.Node{}
+	for _, c := range a.Children {
+		ai[c.Key] = c
+	}
+	for _, c := range b.Children {
+		bi[c.Key] = c
+	}
+	for k := range bi {
+		if _, ok := ai[k]; !ok {
+			res["added"] = append(res["added"], k)
+		}
+	}
+	for k, av := range ai {
+		bv, ok := bi[k]
+		if !ok {
+			res["removed"] = append(res["removed"], k)
+			continue
+		}
+		if av.Type != bv.Type || av.Annotation("gql_type") != bv.Annotation("gql_type") {
+			res["changed"] = append(res["changed"], k)
+		}
+	}
+	return res
+}
+
+func Compatibility(oldN, newN *uir.Node) string {
+	d := Diff(oldN, newN)
+	if len(d["removed"]) == 0 && len(d["changed"]) == 0 {
+		if len(d["added"]) == 0 {
+			return "full"
+		}
+		return "backward"
+	}
+	if len(d["added"]) == 0 && len(d["changed"]) == 0 {
+		return "forward"
+	}
+	return "breaking"
+}
+
 func (r *Registry) SaveToFile(filename string) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -152,16 +259,19 @@ func (r *Registry) SaveToFile(filename string) error {
 }
 
 func (r *Registry) saveToFileLocked(filename string) error {
-	var allSchemas []*SchemaMetadata
+	var all []*SchemaMetadata
 	for _, versions := range r.schemas {
-		allSchemas = append(allSchemas, versions...)
+		all = append(all, versions...)
 	}
-
-	data, err := json.MarshalIndent(allSchemas, "", "  ")
+	doc := persistedRegistry{
+		FormatVersion: StorageFormatVersion,
+		Active:        r.active,
+		Schemas:       all,
+	}
+	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err
 	}
-
 	tempFile := filename + ".tmp"
 	if err := os.WriteFile(tempFile, data, 0644); err != nil {
 		return err
@@ -169,54 +279,80 @@ func (r *Registry) saveToFileLocked(filename string) error {
 	return os.Rename(tempFile, filename)
 }
 
-// LoadFromFile loads the registry from a JSON file and rebuilds the UIR graphs.
 func (r *Registry) LoadFromFile(filename string) error {
 	file, err := os.Open(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // Nothing to load
+			r.mu.Lock()
+			r.loaded = true
+			r.mu.Unlock()
+			return nil
 		}
 		return err
 	}
 	defer file.Close()
-
 	data, err := io.ReadAll(file)
 	if err != nil {
 		return err
 	}
 
-	var allSchemas []*SchemaMetadata
-	if err := json.Unmarshal(data, &allSchemas); err != nil {
-		return err
+	var wrap persistedRegistry
+	var legacy []*SchemaMetadata
+	if err := json.Unmarshal(data, &wrap); err != nil || wrap.FormatVersion == 0 && wrap.Schemas == nil {
+		if err2 := json.Unmarshal(data, &legacy); err2 != nil {
+			return err
+		}
+		wrap.Schemas = legacy
+		wrap.FormatVersion = 1
+		wrap.Active = map[string]string{}
+		for _, m := range legacy {
+			wrap.Active[m.Name] = m.Version
+		}
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	for _, meta := range allSchemas {
-		// Rebuild the UIR graph from RawContent based on Format
-		var root *uir.Node
-		switch meta.Format {
-		case "graphql":
-			l := &lexer.GraphQLLexer{}
-			doc, err := l.Parse(string(meta.RawContent))
-			if err == nil {
-				root = lower.LowerGraphQL(doc)
-			}
-		case "proto":
-			l := &lexer.ProtoLexer{}
-			doc, err := l.Parse(string(meta.RawContent))
-			if err == nil {
-				root = lower.LowerProtobuf(doc)
-			}
-		case "json":
-			// Basic JSON schema parse
-		}
-		meta.Root = root
-
-		r.schemas[meta.Name] = append(r.schemas[meta.Name], meta)
-		r.active[meta.Name] = meta.Version
+	r.schemas = make(map[string][]*SchemaMetadata)
+	r.active = wrap.Active
+	if r.active == nil {
+		r.active = map[string]string{}
 	}
+	for _, meta := range wrap.Schemas {
+		meta.Root = rebuildRoot(meta)
+		r.schemas[meta.Name] = append(r.schemas[meta.Name], meta)
+		if _, ok := r.active[meta.Name]; !ok {
+			r.active[meta.Name] = meta.Version
+		}
+	}
+	r.loaded = true
+	return nil
+}
 
+func rebuildRoot(meta *SchemaMetadata) *uir.Node {
+	switch meta.Format {
+	case "graphql", "gql":
+		l := &lexer.GraphQLLexer{}
+		doc, err := l.Parse(string(meta.RawContent))
+		if err == nil {
+			return lower.LowerGraphQL(doc)
+		}
+	case "proto", "protobuf":
+		l := &lexer.ProtoLexer{}
+		doc, err := l.Parse(string(meta.RawContent))
+		if err == nil {
+			return lower.LowerProtobuf(doc)
+		}
+	case "json", "avro":
+		n, err := lexer.ParseJSON(meta.RawContent)
+		if err == nil {
+			return n
+		}
+	case "capnp", "capnproto":
+		l := &lexer.CapnProtoLexer{}
+		doc, err := l.Parse(string(meta.RawContent))
+		if err == nil {
+			return lower.LowerCapnProto(doc)
+		}
+	}
 	return nil
 }

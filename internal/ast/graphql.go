@@ -19,8 +19,9 @@ func (*GraphQLOperation) isGraphQLDefinition() {}
 
 // GraphQLTypeDefinition represents a type definition (e.g., type User { ... }).
 type GraphQLTypeDefinition struct {
-	Name   string
-	Fields []*GraphQLFieldDefinition
+	Name       string
+	Implements []string
+	Fields     []*GraphQLFieldDefinition
 }
 func (*GraphQLTypeDefinition) isGraphQLDefinition() {}
 
@@ -46,9 +47,53 @@ type GraphQLTypeRef struct {
 
 // GraphQLFieldDefinition represents a field inside a type definition.
 type GraphQLFieldDefinition struct {
-	Name string
-	Type *GraphQLTypeRef
+	Name      string
+	Arguments []*GraphQLArgumentDefinition
+	Type      *GraphQLTypeRef
+	Directives []GraphQLDirective
 }
+
+type GraphQLArgumentDefinition struct {
+	Name         string
+	Type         *GraphQLTypeRef
+	DefaultValue any
+}
+
+type GraphQLDirective struct {
+	Name      string
+	Arguments map[string]any
+}
+
+type GraphQLFragmentDefinition struct {
+	Name       string
+	TypeCond   string
+	Selections []GraphQLSelection
+}
+func (*GraphQLFragmentDefinition) isGraphQLDefinition() {}
+
+type GraphQLFragmentSpread struct {
+	Name       string
+	Directives []GraphQLDirective
+}
+func (*GraphQLFragmentSpread) isGraphQLSelection() {}
+
+type GraphQLInlineFragment struct {
+	TypeCond   string
+	Selections []GraphQLSelection
+}
+func (*GraphQLInlineFragment) isGraphQLSelection() {}
+
+type GraphQLScalarDefinition struct {
+	Name string
+}
+func (*GraphQLScalarDefinition) isGraphQLDefinition() {}
+
+type GraphQLSchemaDefinition struct {
+	Query        string
+	Mutation     string
+	Subscription string
+}
+func (*GraphQLSchemaDefinition) isGraphQLDefinition() {}
 
 // GraphQLEnumDefinition represents an enum definition.
 type GraphQLEnumDefinition struct {

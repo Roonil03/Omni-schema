@@ -9,67 +9,52 @@ import (
 
 // ParseJSON parses a JSON payload and maps it into a UIR Node structure directly.
 func ParseJSON(data []byte) (*uir.Node, error) {
-	var payload map[string]any
+	var payload any
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, err
 	}
-
-	root := uir.NewNode(uir.TypeMap, "Root", nil)
-	MapToUIR(root, payload)
-
-	return root, nil
+	return valueToUIR("Root", payload), nil
 }
 
-// MapToUIR converts a map[string]any (typically from JSON decoding) into UIR child
-// nodes under the given parent. This is exported so that other packages (e.g. the
-// streaming broker) can convert arbitrary event data into UIR graphs without
-// re-serialising to JSON first.
+func valueToUIR(key string, v any) *uir.Node {
+	switch val := v.(type) {
+	case nil:
+		return uir.NewNode(uir.TypeNull, key, nil)
+	case string:
+		return uir.NewNode(uir.TypeString, key, val)
+	case float64:
+		if val == float64(int64(val)) && val >= -9e15 && val <= 9e15 {
+			return uir.NewNode(uir.TypeInt64, key, int64(val))
+		}
+		return uir.NewNode(uir.TypeFloat64, key, val)
+	case bool:
+		return uir.NewNode(uir.TypeBoolean, key, val)
+	case json.Number:
+		if i, err := val.Int64(); err == nil {
+			return uir.NewNode(uir.TypeInt64, key, i)
+		}
+		f, _ := val.Float64()
+		return uir.NewNode(uir.TypeFloat64, key, f)
+	case map[string]any:
+		root := uir.NewNode(uir.TypeMap, key, nil)
+		MapToUIR(root, val)
+		return root
+	case []any:
+		child := uir.NewNode(uir.TypeArray, key, nil)
+		child.ElementType = inferArrayElementType(val)
+		for i, elem := range val {
+			child.AddChild(valueToUIR(fmt.Sprintf("%d", i), elem))
+		}
+		return child
+	default:
+		return uir.NewNode(uir.TypeString, key, fmt.Sprintf("%v", val))
+	}
+}
+
+// MapToUIR converts a map[string]any into UIR child nodes under the given parent.
 func MapToUIR(parent *uir.Node, data map[string]any) {
 	for k, v := range data {
-		switch val := v.(type) {
-		case nil:
-			child := uir.NewNode(uir.TypeNull, k, nil)
-			parent.AddChild(child)
-		case string:
-			child := uir.NewNode(uir.TypeString, k, val)
-			parent.AddChild(child)
-		case float64:
-			child := uir.NewNode(uir.TypeFloat64, k, val)
-			parent.AddChild(child)
-		case bool:
-			child := uir.NewNode(uir.TypeBoolean, k, val)
-			parent.AddChild(child)
-		case map[string]any:
-			child := uir.NewNode(uir.TypeMap, k, nil)
-			MapToUIR(child, val)
-			parent.AddChild(child)
-		case []any:
-			child := uir.NewNode(uir.TypeArray, k, nil)
-			child.ElementType = inferArrayElementType(val)
-			for i, elem := range val {
-				elemKey := fmt.Sprintf("%d", i)
-				switch ev := elem.(type) {
-				case nil:
-					child.AddChild(uir.NewNode(uir.TypeNull, elemKey, nil))
-				case map[string]any:
-					elemNode := uir.NewNode(uir.TypeMap, elemKey, nil)
-					MapToUIR(elemNode, ev)
-					child.AddChild(elemNode)
-				case string:
-					child.AddChild(uir.NewNode(uir.TypeString, elemKey, ev))
-				case float64:
-					child.AddChild(uir.NewNode(uir.TypeFloat64, elemKey, ev))
-				case bool:
-					child.AddChild(uir.NewNode(uir.TypeBoolean, elemKey, ev))
-				default:
-					child.AddChild(uir.NewNode(uir.TypeString, elemKey, fmt.Sprintf("%v", ev)))
-				}
-			}
-			parent.AddChild(child)
-		default:
-			child := uir.NewNode(uir.TypeString, k, fmt.Sprintf("%v", val))
-			parent.AddChild(child)
-		}
+		parent.AddChild(valueToUIR(k, v))
 	}
 }
 
