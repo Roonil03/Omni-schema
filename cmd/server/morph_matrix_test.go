@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"omni-schema/internal/codec"
@@ -19,14 +20,37 @@ func TestHTTPMorphMatrix(t *testing.T) {
 	registry.Default = registry.NewRegistry()
 	srv := httptest.NewServer(newMux())
 	defer srv.Close()
+	runMorphMatrix(t, srv.URL)
+}
 
+func TestComposeMorphMatrix(t *testing.T) {
+	if os.Getenv("OMNI_E2E") != "1" {
+		t.Skip("set OMNI_E2E=1 against a running gateway (docker compose)")
+	}
+	base := os.Getenv("OMNI_E2E_URL")
+	if base == "" {
+		base = "http://localhost:8080"
+	}
+	resp, err := http.Get(base + "/readyz")
+	if err != nil {
+		t.Fatalf("gateway not ready at %s: %v", base, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("readyz status %d", resp.StatusCode)
+	}
+	runMorphMatrix(t, base)
+}
+
+func runMorphMatrix(t *testing.T, base string) {
+	t.Helper()
 	canonical := []byte(`{"name":"Ada","id":42,"ok":true}`)
 	encoded := map[string][]byte{"json": canonical}
 	for _, from := range codec.AdvertisedFormats {
 		if from == "json" {
 			continue
 		}
-		encoded[from] = postMorph(t, srv.URL, "json", from, canonical)
+		encoded[from] = postMorph(t, base, "json", from, canonical)
 		if len(encoded[from]) == 0 {
 			t.Fatalf("json->%s empty body", from)
 		}
@@ -34,7 +58,7 @@ func TestHTTPMorphMatrix(t *testing.T) {
 
 	for _, from := range codec.AdvertisedFormats {
 		for _, to := range codec.AdvertisedFormats {
-			body := postMorph(t, srv.URL, from, to, encoded[from])
+			body := postMorph(t, base, from, to, encoded[from])
 			if to == "graphql" {
 				if !bytes.Contains(body, []byte("type ")) {
 					t.Fatalf("%s->%s: expected GraphQL SDL, got %q", from, to, truncateBytes(body, 120))
