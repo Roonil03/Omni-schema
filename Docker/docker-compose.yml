@@ -7,4 +7,17 @@ services:
       dockerfile: Docker/Dockerfile
     ports:
       - "8080:8080"
+    environment:
+      PORT: "8080"
+      REGISTRY_PATH: /data/registry_store.json
+      OMNI_ENV: production
+      OMNI_DEV_EVENTS: "0"
+    volumes:
+      - registry-data:/data
     restart: unless-stopped
+    # Orchestrators should probe GET /readyz and GET /healthz.
+    # Reverse proxies must forward Upgrade and Connection and keep idle
+    # WebSocket connections alive longer than the gateway ping/read deadline.
+
+volumes:
+  registry-data:

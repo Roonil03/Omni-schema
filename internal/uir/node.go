@@ -8,7 +8,7 @@ type Node struct {
 	Value any
 
 	Children []*Node
-	Parent   *Node
+	Parent   *Node `json:"-"`
 
 	ElementType UIRType
 	TypeExpr    *TypeExpr

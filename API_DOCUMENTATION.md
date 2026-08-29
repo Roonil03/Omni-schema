@@ -130,8 +130,32 @@ This endpoint accepts standard WebSocket connections. You can bind to a register
 
 The protocol expects JSON text frames:
 1. **Init**: Client sends `{"type":"connection_init"}`. Server replies with `{"type":"connection_ack"}`.
-2. **Subscribe**: Client sends `{"id":"sub_1", "type":"subscribe", "payload":{"query":"..."}}`.
-3. **Events**: Server pushes real-time events triggered by the `POST /dev/events` broker endpoint.
+2. **Subscribe**: Client sends `{"id":"sub_1", "type":"subscribe", "payload":{"query":"...","operationName":"A"}}`. Multiple operations require `operationName`. Aliases and fragments are applied to the payload key and selection set.
+3. **Events**: Server pushes `next` frames. GraphQL targets use a GraphQL-over-WebSocket envelope. Binary targets use a JSON envelope with `format`, `schemaVersion`, `eventId`, and base64 `payload`.
+4. **Complete**: `{"type":"complete","id":"sub_1"}` ends that subscription only; the socket stays up.
+5. Query parameters: `schema`, `target`, `batchSize` (Parquet/HDF5/Avro containers).
+
+Delivery is **at-most-once / best-effort**. The subscription binds the active schema version at connect time.
+
+### Event injection `POST /dev/events`
+
+JSON: `{"type":"transactionUpdated","data":{...},"format":"json","id":"optional"}`.  
+Non-JSON: `POST /dev/events?source=protobuf&type=transactionUpdated` with raw body.  
+Disabled when `OMNI_ENV=production` unless `OMNI_DEV_EVENTS=1`.
+
+### Operations & telemetry
+
+- `GET /readyz` — registry initialized
+- `GET /metrics` — counters and latency percentiles
+- `GET /healthz` — liveness plus metric snapshot
+- `POST /system/schema/activate?name=&version=`
+- `POST /system/schema/deprecate?name=&version=`
+- `GET /system/schema/diff?name=&from=&to=`
+- Morph: `?schema=&type=` selects the payload type (never `Children[0]` by default)
+- `X-Request-ID` is accepted or generated; `X-Conversion-Kind` reports lossless / safe_coercion / lossy
+- If `OMNI_API_TOKEN` is set, schema writes require `Authorization: Bearer` or `X-API-Token`
+
+OData is an **OData JSON response subset** (`@odata.context`, `@odata.type`, `value`) with EDM type mapping. It is not an OData query engine.
 
 ---
 

@@ -35,7 +35,7 @@ func encodeProtoMessage(n, schema *uir.Node) ([]byte, error) {
 		for _, c := range n.Children {
 			index[c.Key] = c
 		}
-		for _, field := range schema.Children {
+		for i, field := range schema.Children {
 			child, ok := index[field.Key]
 			if !ok {
 				if num := field.Annotation("proto_number"); num != "" {
@@ -45,10 +45,7 @@ func encodeProtoMessage(n, schema *uir.Node) ([]byte, error) {
 			if !ok || child == nil || child.Presence == uir.PresenceMissing || child.Type == uir.TypeNull {
 				continue
 			}
-			tag := protoTag(field, 0)
-			if tag == 0 {
-				continue
-			}
+			tag := protoTag(field, uint64(i+1))
 			copyProtoMeta(child, field)
 			b, err := encodeProtoField(tag, child)
 			if err != nil {

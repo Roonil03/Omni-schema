@@ -134,14 +134,57 @@ docker run -p 8080:8080 -e PORT=8080 omni-schema
 
 For detailed API specifications, supported format matrices, WebSocket subscription protocols, and error code references, consult the official documentation:
 
-- **[API Documentation](./API_DOCUMENTATION.md)**: Full endpoint reference and usage guide.
+- **[API Documentation](./API_DOCUMENTATION.md)**: Full endpoint reference, capability matrix, and subset boundaries.
 - **[Credits](./Credits.md)**: Acknowledgments and roles of the engineering team members who contributed to this project.
-- **GraphQL Schema Ingestion**: Parses GraphQL SDL, including `interface`, `union`, `enum`, `input`, and complex nested types (`[[Type!]!]!`).
-- **Protobuf Integration**: Supports basic schema-driven translation (`.proto` files), accurately preserving wire-types, tags, and signedness rules.
-- **WebSocket Streaming**: Includes a custom-built, lock-free, zero-dependency RFC 6455 WebSocket broker supporting multi-client backpressure (`DropOldest`) and realtime format conversion.
-- **Experimental Codecs**: Includes heavily constrained/placeholder implementations of Cap'n Proto, Parquet, and HDF5 for exploratory purposes. (Note: These are partial subset implementations and not yet fully interoperable).
-- **Production Telemetry**: Integrates atomic performance counters, `/healthz` endpoints, strict HTTP `MaxBytesReader` payload limits, and structured JSON `slog` logging.
+- **GraphQL Schema Ingestion**: Parses GraphQL SDL, including `interface`, `union`, `enum`, `input`, `scalar`, `schema`, fragments, aliases, and nested types (`[[Type!]!]!`).
+- **Protobuf Integration**: Schema-driven translation (`.proto` files) preserving field numbers, wire types, signedness, enums, oneofs, maps, nested types, and services.
+- **WebSocket Streaming**: Custom RFC 6455 broker with masked-client enforcement, close handshake, deadlines, at-most-once delivery (`DropOldest`), and format conversion.
+- **Codecs**: JSON, MessagePack, Protobuf, Avro OCF, OData JSON subset, GraphQL SDL/result, plus scoped Parquet/HDF5/Cap'n Proto implementations with round-trip tests.
+- **Production Telemetry**: `/healthz`, `/readyz`, `/metrics` (counters + parse/convert/encode/stream P50/P95/P99), request IDs, payload limits, structured `slog`.
 - **Zero Third-Party Dependencies**: The entire project uses only the Go standard library.
+
+### Capability matrix
+
+Every “supported” decode/encode path has automated round-trip coverage in `internal/codec`. Status is **subset** unless noted.
+
+| Format | Decode | Encode | Schema | HTTP morph | Streaming | Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| JSON | yes | yes | optional | yes | 1 event / text frame | complete for objects/arrays |
+| MessagePack | yes | yes | no | yes | 1 message / frame (JSON envelope + base64) | complete schemaless subset |
+| Protobuf | yes | yes | required for faithful types | yes | 1 message / frame | schema-driven; subset `.proto` language |
+| GraphQL | result JSON | SDL (morph) / result (stream) | SDL | yes | GraphQL-over-WS envelope | selection/projection subset, not a full execution engine |
+| Avro | OCF | OCF | embedded + optional UIR | yes | batchable container | Object Container File, null codec |
+| OData | JSON payload | JSON payload | EDM annotations | yes | JSON envelope | **OData JSON response subset**, not a query service |
+| Cap'n Proto | yes | yes | optional | yes | 1 message / frame | single-segment struct/text/list subset |
+| Parquet | yes | yes | optional | yes | **batched artifact** | Omni Parquet subset v1: `PAR1`, 1 row group, PLAIN pages |
+| HDF5 | yes | yes | optional | yes | **batched/chunked artifact** | signature + superblock v0 + contiguous named datasets |
+
+### Streaming semantics
+
+- **Delivery**: at-most-once / best-effort. Queues are bounded; overflow uses DropOldest. No replay buffer.
+- **Ordering**: per subscription, in publish order, until a drop occurs.
+- **JSON**: one event per text frame (transport envelope).
+- **GraphQL**: UIR → GraphQL result `{data:{<alias or field>: ...}}` → `{"type":"next","id","payload"}` envelope.
+- **Protobuf / MessagePack / Cap'n Proto / Avro (single)**: binary payload is base64 inside a JSON metadata envelope (`format`, `schema`, `schemaVersion`, `eventId`).
+- **Parquet / HDF5 / Avro container**: set `batchSize` on the subscription URL; the broker flushes a batch artifact rather than one-file-per-event.
+- **Schema version**: the connection binds the **active** schema version at subscribe time. If that version is later deleted, events for that subscription are skipped (`SchemaMissing`). Deprecation is recorded; incompatible live mutation is not hot-swapped onto existing sockets.
+- **`/dev/events`**: development injection. Disabled when `OMNI_ENV=production` unless `OMNI_DEV_EVENTS=1`. Supports `?source=` for non-JSON payloads.
+
+### Schema-dependent codecs
+
+Pass `?schema=name&type=TypeName` on `/morph` so Protobuf, Cap'n Proto, Avro, Parquet, and HDF5 decoders/encoders receive an explicit type instead of guessing from `Children[0]`.
+
+### Environment
+
+| Variable | Purpose |
+| :--- | :--- |
+| `PORT` | Listen port (default `8080`) |
+| `REGISTRY_PATH` | Schema registry JSON file (default `registry_store.json`) |
+| `OMNI_API_TOKEN` | If set, required as `Authorization: Bearer` or `X-API-Token` for schema mutation and (when set) event inject |
+| `OMNI_ENV` | `production` disables `/dev/events` unless overridden |
+| `OMNI_DEV_EVENTS` | `0` disables inject; `1` allows it in production |
+
+Production on Render is **single-instance**. The JSON registry is local disk, not a multi-node shared store. Use a persistent disk or an external registry if you need durable shared schema state.
 
 ### Architecture Snapshot
 - **Lexers & ASTs**: Constructed natively utilizing `text/scanner` without third-party parsing libraries.
