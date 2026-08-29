@@ -39,28 +39,12 @@ func main() {
 		fmt.Printf("Note: could not load %s: %v\n", path, err)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/system/schema", withCommon(requireSensitiveAuth(schemaHandler)))
-	mux.HandleFunc("/system/schema/activate", withCommon(requireSensitiveAuth(schemaActivateHandler)))
-	mux.HandleFunc("/system/schema/deprecate", withCommon(requireSensitiveAuth(schemaDeprecateHandler)))
-	mux.HandleFunc("/system/schema/diff", withCommon(requireSensitiveAuth(schemaDiffHandler)))
-	mux.HandleFunc("/morph/", withCommon(requireSensitiveAuth(morphHandler)))
-	mux.HandleFunc("/morph", withCommon(requireSensitiveAuth(morphHandler)))
-	mux.HandleFunc("/graphql/subscriptions", subscriptionHandler)
-	mux.HandleFunc("/dev/events", withCommon(requireSensitiveAuth(devEventHandler)))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "metrics": telemetry.GetMetricsSnapshot()})
-	})
-	mux.HandleFunc("/readyz", readyHandler)
-	mux.HandleFunc("/metrics", metricsHandler)
+	handler := newMux()
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-
-	handler := requestIDMiddleware(rateLimitMiddleware(mux))
 	srv := &http.Server{
 		Addr:           ":" + port,
 		Handler:        handler,
@@ -87,6 +71,25 @@ func main() {
 		log.Fatal("Server forced to shutdown:", err)
 	}
 	log.Println("Server exiting")
+}
+
+func newMux() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/system/schema", withCommon(requireSensitiveAuth(schemaHandler)))
+	mux.HandleFunc("/system/schema/activate", withCommon(requireSensitiveAuth(schemaActivateHandler)))
+	mux.HandleFunc("/system/schema/deprecate", withCommon(requireSensitiveAuth(schemaDeprecateHandler)))
+	mux.HandleFunc("/system/schema/diff", withCommon(requireSensitiveAuth(schemaDiffHandler)))
+	mux.HandleFunc("/morph/", withCommon(requireSensitiveAuth(morphHandler)))
+	mux.HandleFunc("/morph", withCommon(requireSensitiveAuth(morphHandler)))
+	mux.HandleFunc("/graphql/subscriptions", subscriptionHandler)
+	mux.HandleFunc("/dev/events", withCommon(requireSensitiveAuth(devEventHandler)))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "metrics": telemetry.GetMetricsSnapshot()})
+	})
+	mux.HandleFunc("/readyz", readyHandler)
+	mux.HandleFunc("/metrics", metricsHandler)
+	return requestIDMiddleware(rateLimitMiddleware(mux))
 }
 
 func withCommon(next http.HandlerFunc) http.HandlerFunc { return next }
