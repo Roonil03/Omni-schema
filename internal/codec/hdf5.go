@@ -21,7 +21,7 @@ import (
 //     uint32 ndatasets
 //     for each dataset:
 //       uint16 name_len, name
-//       uint8  dtype (0 int32, 1 int64, 2 float32, 3 float64, 4 uint8-bytes, 5 utf8)
+//       uint8  dtype (0 int32, 1 int64, 2 float32, 3 float64, 4 uint8-bytes, 5 utf8, 6 bool)
 //       uint64 nelems
 //       uint64 data_offset
 //   raw contiguous dataset payloads
@@ -205,11 +205,10 @@ func hdf5TypeOf(n *uir.Node) byte {
 	switch n.Type {
 	case uir.TypeInt32, uir.TypeUInt32, uir.TypeSInt32, uir.TypeFixed32, uir.TypeSFixed32:
 		return 0
-	case uir.TypeInt64, uir.TypeUInt64, uir.TypeSInt64, uir.TypeFixed64, uir.TypeSFixed64, uir.TypeBoolean:
-		if n.Type == uir.TypeBoolean {
-			return 0
-		}
+	case uir.TypeInt64, uir.TypeUInt64, uir.TypeSInt64, uir.TypeFixed64, uir.TypeSFixed64:
 		return 1
+	case uir.TypeBoolean:
+		return 6
 	case uir.TypeFloat32:
 		return 2
 	case uir.TypeFloat64:
@@ -236,6 +235,12 @@ func writeHDF5Value(buf *bytes.Buffer, dtype byte, v any) {
 			}
 		}
 		binary.Write(buf, binary.LittleEndian, x)
+	case 6:
+		var x byte
+		if b, ok := v.(bool); ok && b {
+			x = 1
+		}
+		buf.WriteByte(x)
 	case 1:
 		binary.Write(buf, binary.LittleEndian, asInt64(v))
 	case 2:
@@ -304,6 +309,12 @@ func readHDF5Values(payload []byte, dtype byte, n int) ([]any, error) {
 			}
 			out = append(out, math.Float64frombits(binary.LittleEndian.Uint64(payload[off:])))
 			off += 8
+		case 6:
+			if off >= len(payload) {
+				return nil, fmt.Errorf("eof hdf5 bool")
+			}
+			out = append(out, payload[off] != 0)
+			off++
 		default:
 			if off+4 > len(payload) {
 				return nil, fmt.Errorf("eof hdf5 len")
@@ -337,6 +348,9 @@ func hdf5ToNode(name string, dtype byte, v any) *uir.Node {
 		return uir.NewNode(uir.TypeFloat64, name, v)
 	case 4:
 		return uir.NewNode(uir.TypeBytes, name, v)
+	case 6:
+		b, _ := v.(bool)
+		return uir.NewNode(uir.TypeBoolean, name, b)
 	default:
 		return uir.NewNode(uir.TypeString, name, v)
 	}

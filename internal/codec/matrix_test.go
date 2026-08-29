@@ -22,27 +22,91 @@ func TestFullConversionMatrix(t *testing.T) {
 		if err != nil {
 			t.Fatalf("encode %s: %v", from, err)
 		}
-		decoded, err := DecodePayload(from, encoded, Options{})
+		decoded, err := DecodePayload(from, encoded, matrixOpts(from, src))
 		if err != nil {
 			t.Fatalf("decode %s: %v", from, err)
 		}
+		assertCanonical(t, decoded, from)
 		for _, to := range AdvertisedFormats {
 			out, err := encodeForMatrix(to, decoded)
 			if err != nil {
 				t.Fatalf("%s->%s encode: %v", from, to, err)
 			}
-			if _, err := DecodePayload(to, out, Options{}); err != nil {
+			back, err := DecodePayload(to, out, matrixOpts(to, decoded))
+			if err != nil {
 				t.Fatalf("%s->%s decode: %v", from, to, err)
 			}
+			assertCanonical(t, back, from+"->"+to)
 		}
 	}
+}
+
+func assertCanonical(t *testing.T, n *uir.Node, hop string) {
+	t.Helper()
+	if childString(n, "name") != "Ada" {
+		t.Fatalf("%s: name=%q keys=%v", hop, childString(n, "name"), keys(n))
+	}
+	if !hasNumeric(n, "id", 42) {
+		t.Fatalf("%s: id not 42 keys=%v", hop, keys(n))
+	}
+	if !hasBoolTrue(n, "ok") {
+		t.Fatalf("%s: ok not true keys=%v", hop, keys(n))
+	}
+}
+
+func hasNumeric(n *uir.Node, key string, want int64) bool {
+	if n == nil {
+		return false
+	}
+	if c := n.ChildByKey(key); c != nil {
+		switch v := c.Value.(type) {
+		case int64:
+			return v == want
+		case int32:
+			return int64(v) == want
+		case int:
+			return int64(v) == want
+		case float64:
+			return v == float64(want)
+		}
+	}
+	for _, c := range n.Children {
+		if c.Type == uir.TypeMap && hasNumeric(c, key, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasBoolTrue(n *uir.Node, key string) bool {
+	if n == nil {
+		return false
+	}
+	if c := n.ChildByKey(key); c != nil {
+		if b, ok := c.Value.(bool); ok && b {
+			return true
+		}
+	}
+	for _, c := range n.Children {
+		if c.Type == uir.TypeMap && hasBoolTrue(c, key) {
+			return true
+		}
+	}
+	return false
 }
 
 func encodeForMatrix(format string, n *uir.Node) ([]byte, error) {
 	if format == "graphql" {
 		return GenerateGraphQLResult(n)
 	}
-	return EncodePayload(format, n, Options{})
+	return EncodePayload(format, n, matrixOpts(format, n))
+}
+
+func matrixOpts(format string, schema *uir.Node) Options {
+	if RequiresExternalSchema(format) {
+		return Options{Schema: schema}
+	}
+	return Options{}
 }
 
 func TestGraphQLSDLRoundTripParse(t *testing.T) {

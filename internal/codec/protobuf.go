@@ -287,8 +287,8 @@ func ParseProtobufWithOptions(data []byte, opts Options) (*uir.Node, error) {
 func parseProtobufMessage(data []byte, parent *uir.Node, schema *uir.Node) error {
 	fieldsByTag := map[uint64]*uir.Node{}
 	if schema != nil {
-		for _, f := range schema.Children {
-			if n := protoTag(f, 0); n != 0 {
+		for i, f := range schema.Children {
+			if n := protoTag(f, uint64(i+1)); n != 0 {
 				fieldsByTag[n] = f
 			}
 		}
