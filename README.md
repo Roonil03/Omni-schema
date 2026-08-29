@@ -124,9 +124,15 @@ For developers and contributors wishing to run or extend Omni-Schema locally, th
 ### Running with Docker
 Build and run the multi-stage container:
 ```bash
-docker build -t omni-schema .
+docker build -f Docker/Dockerfile -t omni-schema .
 docker run -p 8080:8080 -e PORT=8080 omni-schema
 ```
+
+Or from the repository root with Compose (local morph without an API token):
+```bash
+docker compose -f Docker/docker-compose.yml up --build
+```
+Production Compose should set `OMNI_ENV=production` and `OMNI_API_TOKEN`.
 
 ---
 

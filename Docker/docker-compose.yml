@@ -10,10 +10,14 @@ services:
     environment:
       PORT: "8080"
       REGISTRY_PATH: /data/registry_store.json
-      OMNI_ENV: production
+      # Local compose: morph/schema work without a token. For a locked
+      # deployment set OMNI_ENV=production and OMNI_API_TOKEN.
+      OMNI_ENV: development
       OMNI_DEV_EVENTS: "0"
     volumes:
       - registry-data:/data
+    # scratch image USER 65532 cannot write a root-owned named volume.
+    user: "0:0"
     restart: unless-stopped
     # Orchestrators should probe GET /readyz and GET /healthz.
     # Reverse proxies must forward Upgrade and Connection and keep idle

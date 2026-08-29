@@ -9,6 +9,8 @@ FROM scratch
 WORKDIR /app
 COPY --from=builder /app/morph-gateway .
 
+# Non-root by default. docker-compose.yml runs as root so the named
+# volume at /data is writable for REGISTRY_PATH.
 USER 65532:65532
 EXPOSE 8080
 ENV PORT=8080
