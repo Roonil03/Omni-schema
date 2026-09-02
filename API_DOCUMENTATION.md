@@ -28,17 +28,37 @@ Upload a source file or raw data stream and receive the synthesized output as a 
 
 ### Supported Conversions
 
-| Source Format | Target Format | Output Extension | MIME Content-Type |
-| :--- | :--- | :--- | :--- |
-| `json` | `graphql` | `.graphql` | `application/graphql` |
-| `json` | `protobuf` | `.pb` | `application/protobuf` |
-| `json` | `msgpack` | `.msgpack` | `application/msgpack` |
-| `json` | `parquet` | `.parquet` | `application/parquet` |
-| `json` | `capnproto` | `.capnp` | `application/capnproto` |
-| `json` | `hdf5` | `.h5` | `application/x-hdf5` |
-| `json` | `avro` | `.avro` | `application/avro` |
-| `json` | `odata` | `.json` | `application/json` |
-| `json` | `json` | `.json` | `application/json` |
+Omni-Schema operates on a Universal Intermediate Representation (UIR), enabling **any-to-any ($N \times N$) bidirectional conversion** across all 9 supported formats (a complete matrix of 81 conversion paths).
+
+#### Supported Formats & Aliases
+
+| Format Identifier | Accepted Aliases / File Extensions | Output Extension | Output MIME Type | Schema Requirement |
+| :--- | :--- | :--- | :--- | :--- |
+| `json` | `json`, `.json` | `.json` | `application/json` | Self-describing |
+| `protobuf` | `protobuf`, `proto`, `pb`, `.pb`, `.proto` | `.pb` | `application/protobuf` | Schema-aware / Type mapping |
+| `msgpack` | `msgpack`, `messagepack`, `msgpck`, `.msgpack` | `.msgpack` | `application/msgpack` | Self-describing binary |
+| `graphql` | `graphql`, `gql`, `.graphql`, `.gql` | `.graphql` | `application/graphql` | Schema / SDL |
+| `avro` | `avro`, `.avro` | `.avro` | `application/avro` | Self-describing container (OCF) |
+| `odata` | `odata`, `.odata` | `.json` | `application/json` | EDM-annotated JSON |
+| `capnproto` | `capnproto`, `capnp`, `.capnp` | `.capnp` | `application/capnproto` | Schema-aware binary |
+| `parquet` | `parquet`, `pq`, `.parquet`, `.pq` | `.parquet` | `application/parquet` | Columnar container (`PAR1`) |
+| `hdf5` | `hdf5`, `h5`, `hdf`, `.h5`, `.hdf`, `.hdf5` | `.h5` | `application/x-hdf5` | Hierarchical container (`\x89HDF`) |
+
+#### Complete Conversion Matrix (81 Pairwise Routes)
+
+Any format listed in the left column can be transformed into any format listed across the columns:
+
+| Source Format ↓ \ Target Format → | `json` | `protobuf` | `msgpack` | `graphql` | `avro` | `odata` | `capnproto` | `parquet` | `hdf5` |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`json`** (`.json`) | ✅ | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`protobuf`** (`.pb`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`msgpack`** (`.msgpack`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`graphql`** (`.graphql`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`avro`** (`.avro`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`odata`** (`.odata` / `.json`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`capnproto`** (`.capnp`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`parquet`** (`.parquet`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`hdf5`** (`.h5`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
 
 ---
 
