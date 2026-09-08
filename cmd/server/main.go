@@ -432,6 +432,14 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid path or parameters", http.StatusBadRequest)
 		return
 	}
+	if _, err := codec.GetDecoder(source); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := codec.GetEncoder(target); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	decOpts := codec.Options{TypeName: sourceType, RequireType: codec.RequiresExternalSchema(source) && srcMeta != nil}
 	if srcMeta != nil {
@@ -489,6 +497,11 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 	telemetry.ObserveEncode(time.Since(t2))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error synthesizing %s: %v", target, err), 500)
+		return
+	}
+	if len(out) == 0 {
+		telemetry.ConversionFailures.Add(1)
+		http.Error(w, fmt.Sprintf("Error synthesizing %s: conversion produced an empty payload", target), http.StatusBadRequest)
 		return
 	}
 
