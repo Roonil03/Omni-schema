@@ -10,7 +10,7 @@ The gateway can be accessed via the live production deployment or run locally:
 
 | Environment | Base URL | Description |
 | :--- | :--- | :--- |
-| **Production (Render)** | `https://morph-gateway.onrender.com` | Fully hosted live service (zero setup required) |
+| **Production (Render)** | `https://morph-gateway.onrender.com` | Hosted service; a deployment-issued API token is required |
 | **Local / Self-Hosted** | `http://localhost:8080` | Local Go or Docker instance (configured via `PORT` env var) |
 
 > [!TIP]
@@ -28,17 +28,37 @@ Upload a source file or raw data stream and receive the synthesized output as a 
 
 ### Supported Conversions
 
-| Source Format | Target Format | Output Extension | MIME Content-Type |
-| :--- | :--- | :--- | :--- |
-| `json` | `graphql` | `.graphql` | `application/graphql` |
-| `json` | `protobuf` | `.pb` | `application/protobuf` |
-| `json` | `msgpack` | `.msgpack` | `application/msgpack` |
-| `json` | `parquet` | `.parquet` | `application/parquet` |
-| `json` | `capnproto` | `.capnp` | `application/capnproto` |
-| `json` | `hdf5` | `.h5` | `application/x-hdf5` |
-| `json` | `avro` | `.avro` | `application/avro` |
-| `json` | `odata` | `.json` | `application/json` |
-| `json` | `json` | `.json` | `application/json` |
+Omni-Schema operates on a Universal Intermediate Representation (UIR), enabling **any-to-any ($N \times N$) bidirectional conversion** across all 9 supported formats (a complete matrix of 81 conversion paths).
+
+#### Supported Formats & Aliases
+
+| Format Identifier | Accepted Aliases / File Extensions | Output Extension | Output MIME Type | Schema Requirement |
+| :--- | :--- | :--- | :--- | :--- |
+| `json` | `json`, `.json` | `.json` | `application/json` | Self-describing |
+| `protobuf` | `protobuf`, `proto`, `pb`, `.pb`, `.proto` | `.pb` | `application/protobuf` | Schema-aware / Type mapping |
+| `msgpack` | `msgpack`, `messagepack`, `msgpck`, `.msgpack` | `.msgpack` | `application/msgpack` | Self-describing binary |
+| `graphql` | `graphql`, `gql`, `.graphql`, `.gql` | `.graphql` | `application/graphql` | Schema / SDL |
+| `avro` | `avro`, `.avro` | `.avro` | `application/avro` | Self-describing container (OCF) |
+| `odata` | `odata`, `.odata` | `.json` | `application/json` | EDM-annotated JSON |
+| `capnproto` | `capnproto`, `capnp`, `.capnp` | `.capnp` | `application/capnproto` | Schema-aware binary |
+| `parquet` | `parquet`, `pq`, `.parquet`, `.pq` | `.parquet` | `application/parquet` | Columnar container (`PAR1`) |
+| `hdf5` | `hdf5`, `h5`, `hdf`, `.h5`, `.hdf`, `.hdf5` | `.h5` | `application/x-hdf5` | Hierarchical container (`\x89HDF`) |
+
+#### Complete Conversion Matrix (81 Pairwise Routes)
+
+Any format listed in the left column can be transformed into any format listed across the columns:
+
+| Source Format ↓ \ Target Format → | `json` | `protobuf` | `msgpack` | `graphql` | `avro` | `odata` | `capnproto` | `parquet` | `hdf5` |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`json`** (`.json`) | ✅ | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`protobuf`** (`.pb`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`msgpack`** (`.msgpack`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`graphql`** (`.graphql`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`avro`** (`.avro`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`odata`** (`.odata` / `.json`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`capnproto`** (`.capnp`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`parquet`** (`.parquet`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+| **`hdf5`** (`.h5`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
 
 ---
 
@@ -51,6 +71,7 @@ By combining this with cURL's `--remote-name --remote-header-name` (`-O -J` or `
 #### Option 1: Routing via URL Path
 ```bash
 curl -O -J -X POST https://morph-gateway.onrender.com/morph/json/graphql \
+  -H "Authorization: Bearer $OMNI_API_TOKEN" \
   -F "file=@data.json"
 ```
 
@@ -58,6 +79,7 @@ curl -O -J -X POST https://morph-gateway.onrender.com/morph/json/graphql \
 If you do not specify the source format, the server automatically detects it from your uploaded file's extension (`.json` -> `json`):
 ```bash
 curl -O -J -X POST https://morph-gateway.onrender.com/morph \
+  -H "Authorization: Bearer $OMNI_API_TOKEN" \
   -F "file=@data.json" \
   -F "target=protobuf"
 ```
@@ -70,6 +92,7 @@ For automated scripts, piping, or in-memory data buffers where file upload heade
 
 ```bash
 curl -X POST https://morph-gateway.onrender.com/morph/json/graphql \
+  -H "Authorization: Bearer $OMNI_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d @data.json \
   -o output.graphql
@@ -83,7 +106,11 @@ On a successful morphing request (`200 OK`), the server returns:
 - **`Content-Type`**: The MIME type corresponding to the target format.
 - **`Content-Disposition`**: `attachment; filename="{basename}.{ext}"` (e.g., `data.graphql`), instructing browsers and CLI clients (`curl -O -J`) to save the file locally.
 - **`Content-Length`**: The exact byte length of the synthesized output.
+- **`X-Conversion-Kind`**: The strongest conversion class used: `lossless`, `safe_coercion`, or `lossy`.
+- **`X-Request-ID`**: The supplied request ID or a server-generated identifier.
 - **Body**: The raw binary or text bytes of the converted schema/payload.
+
+Requests are limited per client identity, using the first `X-Forwarded-For` address and an API-token fingerprint when available. A `429 Too Many Requests` response includes `Retry-After` in seconds.
 
 ---
 
@@ -92,7 +119,7 @@ On a successful morphing request (`200 OK`), the server returns:
 Before morphing complex binary protocols that require strict pre-defined schemas (such as Cap'n Proto or Protobuf), upload your structural definitions to the system registry. The registry automatically hashes schemas for version control. 
 
 > [!NOTE]
-> In local development or self-hosted environments, the registry state is automatically persisted to `registry_store.json` in the current working directory to ensure your uploaded schemas survive server restarts.
+> In local development or self-hosted environments, the registry state is automatically persisted to `registry_store.json` in the current working directory. The Render deployment writes it to the persistent `/var/data/registry_store.json` disk so schemas survive deploys and restarts.
 
 ### `POST /system/schema`
 
@@ -142,6 +169,7 @@ Delivery is **at-most-once / best-effort**. The subscription binds the active sc
 JSON: `{"type":"transactionUpdated","data":{...},"format":"json","id":"optional"}`.  
 Non-JSON: `POST /dev/events?source=protobuf&type=transactionUpdated` with raw body.  
 Disabled when `OMNI_ENV=production` unless `OMNI_DEV_EVENTS=1`.
+Production requests also require a valid API token. The supplied Render Blueprint sets `OMNI_DEV_EVENTS=0`, so changing the flag is an explicit operator action.
 
 ### Operations & telemetry
 
@@ -153,7 +181,7 @@ Disabled when `OMNI_ENV=production` unless `OMNI_DEV_EVENTS=1`.
 - `GET /system/schema/diff?name=&from=&to=`
 - Morph: `?schema=&type=` selects the payload type (never `Children[0]` by default)
 - `X-Request-ID` is accepted or generated; `X-Conversion-Kind` reports lossless / safe_coercion / lossy
-- If `OMNI_API_TOKEN` is set, schema writes require `Authorization: Bearer` or `X-API-Token`
+- In production, morphing, schema operations, subscriptions, and event injection require `Authorization: Bearer` or `X-API-Token`
 
 OData is an **OData JSON response subset** (`@odata.context`, `@odata.type`, `value`) with EDM type mapping. It is not an OData query engine.
 
@@ -165,6 +193,10 @@ OData is an **OData JSON response subset** (`@odata.context`, `@odata.type`, `va
 | :--- | :--- | :--- |
 | **`200 OK`** | Success | Payload successfully parsed, synthesized, and returned. |
 | **`400 Bad Request`** | Client Error | Missing payload, unsupported source format, or syntax error in input data. |
+| **`401 Unauthorized`** | Authentication Error | A protected endpoint was called without a valid API token. |
+| **`403 Forbidden`** | Disabled Operation | Event injection is disabled by the deployment configuration. |
 | **`405 Method Not Allowed`** | Routing Error | Attempting to use `GET`, `PUT`, or `DELETE` on a `POST`-only endpoint. |
+| **`429 Too Many Requests`** | Rate Limit | The client quota is exhausted; retry after the seconds in `Retry-After`. |
 | **`500 Internal Server Error`** | Synthesis Error | Failure during UIR graph traversal or target codec byte generation. |
 
+Unsupported source and target format identifiers both return `400 Bad Request`. A schema-aware conversion that cannot synthesize any output bytes also returns `400` instead of a successful empty download.

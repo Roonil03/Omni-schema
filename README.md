@@ -26,7 +26,7 @@ Supported formats and protocols include:
 
 ## Quick Start (Live Render API)
 
-The Omni-Schema Gateway is fully hosted on Render and ready for immediate use. You do not need to install Go, Docker, or download the repository to use the live morphing APIs.
+The Omni-Schema Gateway is hosted on Render. Production endpoints are protected by an API token; obtain a token from the deployment owner and send it as `Authorization: Bearer` or `X-API-Token`.
 
 **Production Base URL**: `https://morph-gateway.onrender.com`
 
@@ -54,6 +54,7 @@ user1@user:~$ echo '{"id": 101, "name": "Alice", "role": "admin", "active": true
 # Step 2: Upload data.json to convert it to GraphQL (using -O -J)
 # Notice we do NOT add -H "Content-Type: multipart/form-data"!
 user1@user:~$ curl -O -J -X POST https://morph-gateway.onrender.com/morph/json/graphql \
+  -H "Authorization: Bearer $OMNI_API_TOKEN" \
   -F "file=@data.json"
 
 # Step 3: Check your directory: data.graphql was automatically downloaded and saved!
@@ -77,6 +78,7 @@ You can also specify the target format via form parameters instead of the URL pa
 
 ```bash
 user1@user:~$ curl -O -J -X POST https://morph-gateway.onrender.com/morph \
+  -H "Authorization: Bearer $OMNI_API_TOKEN" \
   -F "file=@data.json" \
   -F "target=protobuf"
 ```
@@ -88,6 +90,7 @@ If your target protocols require explicit structural definitions (such as custom
 
 ```bash
 user1@user:~$ curl -X POST https://morph-gateway.onrender.com/system/schema \
+  -H "Authorization: Bearer $OMNI_API_TOKEN" \
   -F "file=@custom_schema.proto"
 ```
 
@@ -176,7 +179,7 @@ Every “supported” decode/encode path has automated round-trip coverage in `i
 - **Parquet / HDF5 / Avro**: default `batchSize=16` (override with `?batchSize=`); a batch encodes one container file.
 - **Schema version**: bound at subscribe time. If that version is deleted, the subscription receives an error and is closed.
 - **Liveness**: server pings every 20s; RFC close handshake on `OpClose`.
-- **`/dev/events`**: `?source=` selects any advertised decoder. Disabled in production unless `OMNI_DEV_EVENTS=1`.
+- **`/dev/events`**: `?source=` selects any advertised decoder. Render sets `OMNI_DEV_EVENTS=0`; production injection requires both `OMNI_DEV_EVENTS=1` and a valid API token.
 
 ### Schema-dependent codecs
 
@@ -196,11 +199,11 @@ Every “supported” decode/encode path has automated round-trip coverage in `i
 | :--- | :--- |
 | `PORT` | Listen port (default `8080`) |
 | `REGISTRY_PATH` | Schema registry JSON file (default `registry_store.json`) |
-| `OMNI_API_TOKEN` | If set, required as `Authorization: Bearer` or `X-API-Token` for schema mutation and (when set) event inject |
+| `OMNI_API_TOKEN` | In production, required as `Authorization: Bearer` or `X-API-Token` for morphing, schemas, event injection, and subscriptions |
 | `OMNI_ENV` | `production` disables `/dev/events` unless overridden |
 | `OMNI_DEV_EVENTS` | `0` disables inject; `1` allows it in production |
 
-Production on Render is **single-instance**. The JSON registry is local disk, not a multi-node shared store. Use a persistent disk or an external registry if you need durable shared schema state.
+Production on Render is **single-instance**. Its JSON registry is stored on the persistent `/var/data` disk. Use an external registry before scaling to multiple instances because the disk is not shared across instances.
 
 ### Architecture Snapshot
 - **Lexers & ASTs**: Constructed natively utilizing `text/scanner` without third-party parsing libraries.

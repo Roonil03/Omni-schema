@@ -4,8 +4,9 @@ The **Omni-Schema Gateway** is the result of dedicated engineering in systems ar
 
 ---
 ### Team:
-1. [Roonil03: ](https://github.com/Roonil03)The maintainer and developer of the project.
-2. [Ishaan Vatus: ](https://github.com/ishaanvatus)The tester for the project.
+1. [Roonil03:](https://github.com/Roonil03) The maintainer and developer of the project.
+2. [Ishaan Vatus:](https://github.com/ishaanvatus) Tester for the project.
+3. [Lakshit Verma:](https://github.com/vee1e) Tester for the project.
 
 ---
 

@@ -19,3 +19,5 @@ Implementation.md
 
 # Testing artifacts
 testing_files/
+
+.cache/

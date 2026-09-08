@@ -6,3 +6,13 @@ services:
     dockerfilePath: ./Docker/Dockerfile
     plan: free
     autoDeploy: false
+    healthCheckPath: /readyz
+    envVars:
+      - key: OMNI_ENV
+        value: production
+      - key: OMNI_API_TOKEN
+        generateValue: true
+      - key: REGISTRY_PATH
+        value: /tmp/registry_store.json
+      - key: OMNI_DEV_EVENTS
+        value: "0"
