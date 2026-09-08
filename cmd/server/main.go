@@ -3,16 +3,20 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -89,7 +93,7 @@ func newMux() http.Handler {
 	})
 	mux.HandleFunc("/readyz", readyHandler)
 	mux.HandleFunc("/metrics", metricsHandler)
-	return requestIDMiddleware(rateLimitMiddleware(mux))
+	return requestIDMiddleware(newRateLimiter(120, time.Minute).middleware(mux))
 }
 
 func withCommon(next http.HandlerFunc) http.HandlerFunc { return next }
@@ -106,30 +110,73 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-var limiter = struct {
-	mu sync.Mutex
-	n  map[string]int
-	t  time.Time
-}{n: map[string]int{}, t: time.Now()}
+type rateLimitEntry struct {
+	requests int
+	resetAt  time.Time
+}
 
-func rateLimitMiddleware(next http.Handler) http.Handler {
-	limit := 120
+type rateLimiter struct {
+	mu      sync.Mutex
+	clients map[string]rateLimitEntry
+	limit   int
+	window  time.Duration
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{clients: make(map[string]rateLimitEntry), limit: limit, window: window}
+}
+
+func (l *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.RemoteAddr
-		limiter.mu.Lock()
-		if time.Since(limiter.t) > time.Minute {
-			limiter.n = map[string]int{}
-			limiter.t = time.Now()
+		now := time.Now()
+		key := rateLimitKey(r)
+		l.mu.Lock()
+		entry := l.clients[key]
+		if entry.resetAt.IsZero() || !now.Before(entry.resetAt) {
+			entry = rateLimitEntry{resetAt: now.Add(l.window)}
 		}
-		limiter.n[key]++
-		n := limiter.n[key]
-		limiter.mu.Unlock()
-		if n > limit {
+		entry.requests++
+		l.clients[key] = entry
+		l.mu.Unlock()
+		if entry.requests > l.limit {
+			retryAfter := int(math.Ceil(time.Until(entry.resetAt).Seconds()))
+			if retryAfter < 1 {
+				retryAfter = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func rateLimitKey(r *http.Request) string {
+	forwardedFor := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0])
+	credential := r.Header.Get("X-API-Token")
+	if credential == "" {
+		authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+		if len(authorization) > len("Bearer ") && strings.EqualFold(authorization[:len("Bearer ")], "Bearer ") {
+			credential = strings.TrimSpace(authorization[len("Bearer "):])
+		}
+	}
+
+	credentialKey := ""
+	if credential != "" {
+		digest := sha256.Sum256([]byte(credential))
+		credentialKey = hex.EncodeToString(digest[:8])
+	}
+	if forwardedFor != "" {
+		return "forwarded:" + forwardedFor + "|credential:" + credentialKey
+	}
+	if credentialKey != "" {
+		return "credential:" + credentialKey
+	}
+	remoteHost := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		remoteHost = host
+	}
+	return "remote:" + remoteHost
 }
 
 func newID() string {
