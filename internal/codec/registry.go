@@ -56,6 +56,8 @@ func GetDecoder(name string) (Decoder, error) {
 }
 
 func init() {
+	RegisterDecoder("cbor", DecoderFunc(ParseCBOR))
+	RegisterEncoder("cbor", EncoderFunc(GenerateCBOR))
 	RegisterDecoder("json", DecoderFunc(lexer.ParseJSON))
 	RegisterDecoder("protobuf", schemaDecoderFunc(ParseProtobufWithOptions))
 	RegisterDecoder("msgpack", DecoderFunc(ParseMessagePack))

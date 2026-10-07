@@ -609,6 +609,8 @@ func morphFormats(r *http.Request, uploadedFilename string) (source, target stri
 
 func targetFileInfo(target string) (ext string, contentType string) {
 	switch target {
+	case "cbor":
+		return "cbor", "application/cbor"
 	case "graphql":
 		return "graphql", "application/graphql"
 	case "protobuf":
