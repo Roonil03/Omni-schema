@@ -217,15 +217,16 @@ Render cannot move an existing service between regions. Create a new free Docker
 
 ### Performance snapshot — 2026-10-07
 
-Warm HTTP samples use the 33-byte JSON payload `{"name":"Ada","id":42,"ok":true}`, 30 measured requests in three batches at concurrency 10, and a reused HTTP client. Latency includes the complete response body. These are small snapshots from this machine, not production capacity guarantees. Docker measures JSON → CBOR; Render measures JSON → GraphQL on the existing `morph-gateway.onrender.com` service. That service does not support CBOR yet (HTTP 400); its region is unverified. Singapore CBOR metrics remain pending deployment of `morph-gateway-sg` from `codex/cbor`.
+Warm HTTP samples use the 33-byte JSON payload `{"name":"Ada","id":42,"ok":true}` and a reused HTTP client at concurrency 10. The refreshed Docker JSON → CBOR run uses three warm-up requests followed by 100 measured requests in ten batches. Latency includes the complete response body. The earlier Render JSON → GraphQL sample used one warm-up request and 30 measured requests in three batches on the existing `morph-gateway.onrender.com` service. These are small snapshots from this machine, not production capacity guarantees. The existing Render service does not support CBOR yet (HTTP 400); its region is unverified. Singapore CBOR metrics remain pending deployment from `codex/cbor`. The Blueprint on `main` builds `main`; select `codex/cbor` to deploy this additional format.
 
-The CBOR round-trip microbenchmark uses the same three-field object directly in the codec, with Go 1.25 on Linux/amd64 in Docker on an Intel i9-11900H. It measures encoding plus decoding, excluding HTTP and network latency. To reproduce: `go test ./internal/codec -run '^$' -bench BenchmarkCBORRoundTrip -benchmem`. Run the full container matrix with `OMNI_E2E=1 OMNI_E2E_URL=http://localhost:8080 go test ./cmd/server -run TestComposeMorphMatrix`; for authenticated deployments, supply `OMNI_E2E_TOKEN`.
+The CBOR round-trip microbenchmark uses the same three-field object directly in the codec, with Go 1.25 on Linux/amd64 in Docker on an Intel i9-11900H. It measures encoding plus decoding, excluding HTTP and network latency. Three runs measured 1,177, 1,342, and 1,259 ns/op; the badge reports their median, 1,259 ns/op. Each run allocated 1,504 bytes and 31 allocations per operation. To reproduce: `go test ./internal/codec -run '^$' -bench BenchmarkCBORRoundTrip -benchmem -count=3`. Run the full container matrix with `OMNI_E2E=1 OMNI_E2E_URL=http://localhost:8080 go test ./cmd/server -run TestComposeMorphMatrix`; for authenticated deployments, supply `OMNI_E2E_TOKEN`.
 
 ![Docker HTTP conversion routes](https://img.shields.io/badge/Docker_HTTP_routes-100%2F100_passed-brightgreen)
-![Docker CBOR p50 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p50_c10-0.592_ms-blue)
-![Docker CBOR p95 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p95_c10-6.235_ms-blue)
-![Docker CBOR success](https://img.shields.io/badge/Docker_CBOR_success-30%2F30-brightgreen)
+![Docker CBOR p50 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p50_c10-0.660_ms-blue)
+![Docker CBOR p95 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p95_c10-3.414_ms-blue)
+![Docker CBOR p99 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p99_c10-6.840_ms-blue)
+![Docker CBOR success](https://img.shields.io/badge/Docker_CBOR_success-100%2F100-brightgreen)
 ![Existing Render GraphQL p50 at concurrency 10](https://img.shields.io/badge/Existing_Render_GraphQL_p50_c10-268.182_ms-blue)
 ![Existing Render GraphQL p95 at concurrency 10](https://img.shields.io/badge/Existing_Render_GraphQL_p95_c10-778.669_ms-blue)
 ![Existing Render GraphQL success](https://img.shields.io/badge/Existing_Render_GraphQL_success-30%2F30-brightgreen)
-![CBOR codec round trip](https://img.shields.io/badge/CBOR_codec_round_trip-1275_ns%2Fop-blue)
+![CBOR codec round trip](https://img.shields.io/badge/CBOR_codec_round_trip-1259_ns%2Fop-blue)
