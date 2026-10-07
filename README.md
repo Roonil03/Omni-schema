@@ -16,6 +16,7 @@ Supported formats and protocols include:
 - **Standard Text Formats**: [JSON](https://www.json.org/), [Protobuf](https://protobuf.dev/)
 - **Zero-Copy & Memory-Aligned**: [Cap'n Proto](https://capnproto.org/)
 - **Schemaless Binary**: [MessagePack](https://msgpack.org/)
+- **Compact Binary**: [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html), with bidirectional conversion to every other format (100 routes total)
 - **Columnar & Big Data**: [Apache Parquet](https://parquet.apache.org/)
 - **Hierarchical Multidimensional**: [HDF5](https://www.hdfgroup.org/solutions/hdf5/)
 - **Data Serialization**: [Apache Avro](https://avro.apache.org/)
@@ -160,6 +161,7 @@ Every “supported” decode/encode path has automated round-trip coverage in `i
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
 | JSON | yes | yes | optional | yes | 1 event / text frame | complete for objects/arrays |
 | MessagePack | yes | yes | no | yes | 1 **OpBinary** envelope | complete schemaless subset |
+| CBOR | yes | yes | no | yes | 1 **OpBinary** envelope | RFC 8949 definite-length subset; text map keys, depth limit 64; rejects tags and indefinite lengths |
 | Protobuf | yes | yes | required for faithful types | yes | 1 **OpBinary** envelope | schema-driven; subset `.proto` language |
 | GraphQL | result JSON | SDL (morph) / result (stream) | SDL | yes | GraphQL-over-WS **text** envelope | subscription selection/projection; not a full execution engine |
 | Avro | OCF | OCF | embedded + optional UIR | yes | **OpBinary** batched OCF | Object Container File, null codec |
@@ -168,6 +170,10 @@ Every “supported” decode/encode path has automated round-trip coverage in `i
 | Parquet | yes | yes | optional | yes | **OpBinary** batched file | Omni Parquet subset v1 (`PAR1`, PLAIN pages) — not parquet-cli certified |
 | HDF5 | yes | yes | optional | yes | **OpBinary** batched file | signature + superblock v0 + contiguous datasets — not h5dump certified |
 
+### CBOR verification
+
+CBOR regression coverage verifies actual values across all ten formats, including signed/unsigned 64-bit boundaries, Unicode, nested maps/arrays, empty arrays, nulls, native bytes, and float16/32/64 inputs. Raw-body and multipart curl round trips are checked against Docker. Invalid data and target-subset combinations that would discard values are rejected; see the [CBOR limitations](./API_DOCUMENTATION.md#complete-conversion-matrix-100-pairwise-routes). CBOR parsing and encoding are capped at 100,000 items, including map keys, and 64 nesting levels. HTTP bodies are capped at 10 MiB.
+
 ### Streaming semantics
 
 - **Delivery**: **at-most-once / best-effort**. Bounded queues; DropOldest on overflow. Event IDs are deduplicated per subscription.
@@ -175,7 +181,7 @@ Every “supported” decode/encode path has automated round-trip coverage in `i
 - **Ordering**: per subscription, in publish order, until a drop occurs.
 - **JSON / OData**: one event per **text** frame (transport envelope).
 - **GraphQL**: UIR → GraphQL result `{data:{<alias>: ...}}` → `{"type":"next","id","payload"}` text envelope. Multi-root subscriptions fan out by matching `eventType` to each root field name. Operations must be `subscription`; parse errors and unknown fields are rejected.
-- **Binary targets** (Protobuf, MessagePack, Cap'n Proto, Avro, Parquet, HDF5): **OpBinary** frames with an `OMNI` header (`eventId`, `format`, `schemaVersion`) then raw codec bytes — **not** Base64-in-JSON.
+- **Binary targets** (Protobuf, MessagePack, CBOR, Cap'n Proto, Avro, Parquet, HDF5): **OpBinary** frames with an `OMNI` header (`eventId`, `format`, `schemaVersion`) then raw codec bytes — **not** Base64-in-JSON.
 - **Parquet / HDF5 / Avro**: default `batchSize=16` (override with `?batchSize=`); a batch encodes one container file.
 - **Schema version**: bound at subscribe time. If that version is deleted, the subscription receives an error and is closed.
 - **Liveness**: server pings every 20s; RFC close handshake on `OpClose`.
@@ -203,10 +209,28 @@ Every “supported” decode/encode path has automated round-trip coverage in `i
 | `OMNI_ENV` | `production` disables `/dev/events` unless overridden |
 | `OMNI_DEV_EVENTS` | `0` disables inject; `1` allows it in production |
 
-Production on Render is **single-instance**. Its JSON registry is stored on the persistent `/var/data` disk. Use an external registry before scaling to multiple instances because the disk is not shared across instances.
+The Render Blueprint selects the **free Singapore region** and keeps authentication enabled. Free Render storage at `/tmp/registry_store.json` is ephemeral; schemas must be re-registered after restarts, redeploys, or idle shutdowns. Local Docker Compose retains its persistent named volume.
+
+Render cannot move an existing service between regions. Create a new free Docker web service in Singapore from branch `codex/cbor`, using this Blueprint, and obtain its generated API token. Changing `region` in this repository alone does not migrate the current service. See [Render regions](https://render.com/docs/regions).
 
 ### Architecture Snapshot
 - **Lexers & ASTs**: Constructed natively utilizing `text/scanner` without third-party parsing libraries.
 - **Lowering Engine**: Maps complex schema abstractions down to a universal `uir.TypeMap` and `uir.TypeArray`.
 - **Codecs**: Synthesizes heavily specified binary and text byte representations directly from the UIR memory pool.
 - **WebSockets**: Implements TCP hijacking via `net/http` to securely facilitate real-time GraphQL subscription channels.
+
+### Performance snapshot — 2026-10-07
+
+Warm HTTP samples use the 33-byte JSON payload `{"name":"Ada","id":42,"ok":true}` and a reused HTTP client at concurrency 10. The refreshed Docker JSON → CBOR run uses three warm-up requests followed by 100 measured requests in ten batches. Latency includes the complete response body. The earlier Render JSON → GraphQL sample used one warm-up request and 30 measured requests in three batches on the existing `morph-gateway.onrender.com` service. These are small snapshots from this machine, not production capacity guarantees. The existing Render service does not support CBOR yet (HTTP 400); its region is unverified. Singapore CBOR metrics remain pending deployment from `codex/cbor`. The Blueprint on `main` builds `main`; select `codex/cbor` to deploy this additional format.
+
+The CBOR round-trip microbenchmark uses the same three-field object directly in the codec, with Go 1.25 on Linux/amd64 in Docker on an Intel i9-11900H. It measures encoding plus decoding, excluding HTTP and network latency. Three runs measured 1,177, 1,342, and 1,259 ns/op; the badge reports their median, 1,259 ns/op. Each run allocated 1,504 bytes and 31 allocations per operation. To reproduce: `go test ./internal/codec -run '^$' -bench BenchmarkCBORRoundTrip -benchmem -count=3`. Run the full container matrix with `OMNI_E2E=1 OMNI_E2E_URL=http://localhost:8080 go test ./cmd/server -run TestComposeMorphMatrix`; for authenticated deployments, supply `OMNI_E2E_TOKEN`.
+
+![Docker HTTP conversion routes](https://img.shields.io/badge/Docker_HTTP_routes-100%2F100_passed-brightgreen)
+![Docker CBOR p50 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p50_c10-0.660_ms-blue)
+![Docker CBOR p95 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p95_c10-3.414_ms-blue)
+![Docker CBOR p99 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p99_c10-6.840_ms-blue)
+![Docker CBOR success](https://img.shields.io/badge/Docker_CBOR_success-100%2F100-brightgreen)
+![Existing Render GraphQL p50 at concurrency 10](https://img.shields.io/badge/Existing_Render_GraphQL_p50_c10-268.182_ms-blue)
+![Existing Render GraphQL p95 at concurrency 10](https://img.shields.io/badge/Existing_Render_GraphQL_p95_c10-778.669_ms-blue)
+![Existing Render GraphQL success](https://img.shields.io/badge/Existing_Render_GraphQL_success-30%2F30-brightgreen)
+![CBOR codec round trip](https://img.shields.io/badge/CBOR_codec_round_trip-1259_ns%2Fop-blue)

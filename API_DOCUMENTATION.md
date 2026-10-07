@@ -28,7 +28,7 @@ Upload a source file or raw data stream and receive the synthesized output as a 
 
 ### Supported Conversions
 
-Omni-Schema operates on a Universal Intermediate Representation (UIR), enabling **any-to-any ($N \times N$) bidirectional conversion** across all 9 supported formats (a complete matrix of 81 conversion paths).
+Omni-Schema operates on a Universal Intermediate Representation (UIR), enabling bidirectional conversion across all 10 supported formats: a complete 10×10 matrix of 100 conversion paths, including 19 routes involving CBOR.
 
 #### Supported Formats & Aliases
 
@@ -43,22 +43,24 @@ Omni-Schema operates on a Universal Intermediate Representation (UIR), enabling 
 | `capnproto` | `capnproto`, `capnp`, `.capnp` | `.capnp` | `application/capnproto` | Schema-aware binary |
 | `parquet` | `parquet`, `pq`, `.parquet`, `.pq` | `.parquet` | `application/parquet` | Columnar container (`PAR1`) |
 | `hdf5` | `hdf5`, `h5`, `hdf`, `.h5`, `.hdf`, `.hdf5` | `.h5` | `application/x-hdf5` | Hierarchical container (`\x89HDF`) |
+| `cbor` | `cbor`, `.cbor` | `.cbor` | `application/cbor` | Self-describing binary; RFC 8949 subset |
 
-#### Complete Conversion Matrix (81 Pairwise Routes)
+#### Complete Conversion Matrix (100 Pairwise Routes)
 
 Any format listed in the left column can be transformed into any format listed across the columns:
 
-| Source Format ↓ \ Target Format → | `json` | `protobuf` | `msgpack` | `graphql` | `avro` | `odata` | `capnproto` | `parquet` | `hdf5` |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`json`** (`.json`) | ✅ | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
-| **`protobuf`** (`.pb`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
-| **`msgpack`** (`.msgpack`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
-| **`graphql`** (`.graphql`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
-| **`avro`** (`.avro`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
-| **`odata`** (`.odata` / `.json`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
-| **`capnproto`** (`.capnp`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
-| **`parquet`** (`.parquet`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
-| **`hdf5`** (`.h5`) | ✅ (`.json`) | ✅ (`.pb`) | ✅ (`.msgpack`) | ✅ (`.graphql`) | ✅ (`.avro`) | ✅ (`.json`) | ✅ (`.capnp`) | ✅ (`.parquet`) | ✅ (`.h5`) |
+Sources and targets both accept `json`, `protobuf`, `msgpack`, `graphql`, `avro`, `odata`, `capnproto`, `parquet`, `hdf5`, and `cbor`. Every ordered pair, including identity conversion, is covered by the codec and HTTP matrix tests.
+
+CBOR uses `.cbor` files and `application/cbor`, requires no external schema, and follows the [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html) definite-length subset. It supports text-keyed maps, arrays, UTF-8 strings, byte strings, 64-bit integers, floating-point values, booleans, and null. Tags, indefinite-length containers, arbitrary map keys, duplicate keys, trailing bytes, nesting deeper than 64 levels, and more than 100,000 items (including map keys) are rejected. JSON integers preserve signed/unsigned 64-bit values exactly; integers outside that range and overflowing floating-point literals return 400.
+
+CBOR conversion into a narrower target model returns 400 for unsupported combinations instead of silently returning corrupt output:
+
+- JSON/OData use base64 text for byte strings and reject NaN/Infinity. Empty arrays remain arrays.
+- Protobuf/Cap'n Proto require a registered schema for faithful field names/types; explicit null values are rejected. Cap'n Proto requires a struct object.
+- Parquet/HDF5/Avro subsets accept flat records or homogeneous arrays of flat records. Nested containers, inconsistent record fields/types, and unsigned integers above `MaxInt64` are rejected. Parquet/HDF5 reject explicit null fields; Parquet also rejects native byte strings. Container output may decode as a record array even for a single input object.
+- The HTTP GraphQL target synthesizes SDL, not a value-preserving GraphQL result. Scalar roots, empty objects, and invalid GraphQL field names are rejected.
+
+Schema-aware payload projection returns the selected object's fields directly, without an artificial wrapper. Select `sourceSchema`/`sourceType` for decoding schema-bound binary data and `targetSchema`/`targetType` for projection; a shared `schema`/`type` applies to both sides.
 
 ---
 
@@ -119,7 +121,7 @@ Requests are limited per client identity, using the first `X-Forwarded-For` addr
 Before morphing complex binary protocols that require strict pre-defined schemas (such as Cap'n Proto or Protobuf), upload your structural definitions to the system registry. The registry automatically hashes schemas for version control. 
 
 > [!NOTE]
-> In local development or self-hosted environments, the registry state is automatically persisted to `registry_store.json` in the current working directory. The Render deployment writes it to the persistent `/var/data/registry_store.json` disk so schemas survive deploys and restarts.
+> Local Compose persists schemas in its named volume. The free Render deployment uses `/tmp/registry_store.json`, which is ephemeral and loses schemas on restart, redeploy, or idle shutdown. Keep copies of schemas for re-registration.
 
 ### `POST /system/schema`
 

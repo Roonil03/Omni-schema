@@ -42,7 +42,8 @@ func GenerateMessagePack(n *uir.Node) ([]byte, error) {
 		}
 		buf = append(buf, b...)
 
-	case uir.TypeInt32, uir.TypeInt64, uir.TypeUInt32, uir.TypeUInt64:
+	case uir.TypeInt32, uir.TypeInt64, uir.TypeUInt32, uir.TypeUInt64,
+		uir.TypeSInt32, uir.TypeSInt64, uir.TypeFixed32, uir.TypeFixed64, uir.TypeSFixed32, uir.TypeSFixed64:
 		var isUnsigned bool
 		var uval uint64
 		var val int64
@@ -50,6 +51,9 @@ func GenerateMessagePack(n *uir.Node) ([]byte, error) {
 		case uint64:
 			isUnsigned = true
 			uval = v
+		case uint32:
+			isUnsigned = true
+			uval = uint64(v)
 		case int64:
 			val = v
 		case int32:
@@ -90,6 +94,9 @@ func GenerateMessagePack(n *uir.Node) ([]byte, error) {
 		val, _ := n.Value.(float64)
 		bits := math.Float64bits(val)
 		buf = append(buf, 0xcb, byte(bits>>56), byte(bits>>48), byte(bits>>40), byte(bits>>32), byte(bits>>24), byte(bits>>16), byte(bits>>8), byte(bits))
+	case uir.TypeFloat32:
+		val, _ := n.Value.(float32)
+		buf = binary.BigEndian.AppendUint32(append(buf, 0xca), math.Float32bits(val))
 
 	case uir.TypeBoolean:
 		val, _ := n.Value.(bool)
@@ -139,13 +146,18 @@ func GenerateMessagePack(n *uir.Node) ([]byte, error) {
 			}
 			buf = append(buf, cb...)
 		}
+	default:
+		return nil, fmt.Errorf("msgpack: unsupported node type %s", n.Type)
 	}
 	return buf, nil
 }
 
 // ParseMessagePack decodes a msgpack byte stream into a UIR Node graph.
 func ParseMessagePack(data []byte) (*uir.Node, error) {
-	node, _, err := parseMessagePackValue("", data)
+	node, rest, err := parseMessagePackValue("", data)
+	if err == nil && len(rest) != 0 {
+		return nil, fmt.Errorf("msgpack: trailing bytes")
+	}
 	return node, err
 }
 
@@ -203,103 +215,155 @@ func parseMessagePackValue(key string, data []byte) (*uir.Node, []byte, error) {
 	switch b {
 	// Integers
 	case 0xcc: // uint 8
-		if len(data) < 1 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 1 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		return uir.NewNode(uir.TypeUInt64, key, uint64(data[0])), data[1:], nil
 	case 0xcd: // uint 16
-		if len(data) < 2 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 2 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		v := binary.BigEndian.Uint16(data)
 		return uir.NewNode(uir.TypeUInt64, key, uint64(v)), data[2:], nil
 	case 0xce: // uint 32
-		if len(data) < 4 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 4 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		v := binary.BigEndian.Uint32(data)
 		return uir.NewNode(uir.TypeUInt64, key, uint64(v)), data[4:], nil
 	case 0xcf: // uint 64
-		if len(data) < 8 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 8 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		v := binary.BigEndian.Uint64(data)
 		return uir.NewNode(uir.TypeUInt64, key, v), data[8:], nil
 	case 0xd0: // int 8
-		if len(data) < 1 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 1 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		return uir.NewNode(uir.TypeInt64, key, int64(int8(data[0]))), data[1:], nil
 	case 0xd1: // int 16
-		if len(data) < 2 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 2 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		v := int16(binary.BigEndian.Uint16(data))
 		return uir.NewNode(uir.TypeInt64, key, int64(v)), data[2:], nil
 	case 0xd2: // int 32
-		if len(data) < 4 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 4 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		v := int32(binary.BigEndian.Uint32(data))
 		return uir.NewNode(uir.TypeInt64, key, int64(v)), data[4:], nil
 	case 0xd3: // int 64
-		if len(data) < 8 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 8 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		v := int64(binary.BigEndian.Uint64(data))
 		return uir.NewNode(uir.TypeInt64, key, v), data[8:], nil
 
 	// Floats
 	case 0xca: // float 32
-		if len(data) < 4 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 4 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		v := math.Float32frombits(binary.BigEndian.Uint32(data))
 		return uir.NewNode(uir.TypeFloat64, key, float64(v)), data[4:], nil
 	case 0xcb: // float 64
-		if len(data) < 8 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 8 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		v := math.Float64frombits(binary.BigEndian.Uint64(data))
 		return uir.NewNode(uir.TypeFloat64, key, v), data[8:], nil
 
 	// Binaries
 	case 0xc4: // bin 8
-		if len(data) < 1 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 1 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(data[0])
 		data = data[1:]
-		if len(data) < l { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < l {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		return uir.NewNode(uir.TypeBytes, key, data[:l]), data[l:], nil
 	case 0xc5: // bin 16
-		if len(data) < 2 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 2 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(binary.BigEndian.Uint16(data))
 		data = data[2:]
-		if len(data) < l { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < l {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		return uir.NewNode(uir.TypeBytes, key, data[:l]), data[l:], nil
 	case 0xc6: // bin 32
-		if len(data) < 4 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 4 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(binary.BigEndian.Uint32(data))
 		data = data[4:]
-		if len(data) < l { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < l {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		return uir.NewNode(uir.TypeBytes, key, data[:l]), data[l:], nil
 
 	// Strings
 	case 0xd9: // str 8
-		if len(data) < 1 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 1 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(data[0])
 		data = data[1:]
-		if len(data) < l { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < l {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		return uir.NewNode(uir.TypeString, key, string(data[:l])), data[l:], nil
 	case 0xda: // str 16
-		if len(data) < 2 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 2 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(binary.BigEndian.Uint16(data))
 		data = data[2:]
-		if len(data) < l { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < l {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		return uir.NewNode(uir.TypeString, key, string(data[:l])), data[l:], nil
 	case 0xdb: // str 32
-		if len(data) < 4 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 4 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(binary.BigEndian.Uint32(data))
 		data = data[4:]
-		if len(data) < l { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < l {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		return uir.NewNode(uir.TypeString, key, string(data[:l])), data[l:], nil
 
 	// Arrays
 	case 0xdc: // array 16
-		if len(data) < 2 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 2 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(binary.BigEndian.Uint16(data))
 		return parseMessagePackArray(key, l, data[2:])
 	case 0xdd: // array 32
-		if len(data) < 4 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 4 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(binary.BigEndian.Uint32(data))
 		return parseMessagePackArray(key, l, data[4:])
 
 	// Maps
 	case 0xde: // map 16
-		if len(data) < 2 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 2 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(binary.BigEndian.Uint16(data))
 		return parseMessagePackMap(key, l, data[2:])
 	case 0xdf: // map 32
-		if len(data) < 4 { return nil, data, fmt.Errorf("unexpected EOF") }
+		if len(data) < 4 {
+			return nil, data, fmt.Errorf("unexpected EOF")
+		}
 		l := int(binary.BigEndian.Uint32(data))
 		return parseMessagePackMap(key, l, data[4:])
 
@@ -332,7 +396,7 @@ func parseMessagePackMap(key string, length int, data []byte) (*uir.Node, []byte
 			return nil, rem, err
 		}
 		data = rem
-		
+
 		kStr := ""
 		if kNode != nil && kNode.Type == uir.TypeString {
 			kStr = kNode.Value.(string)

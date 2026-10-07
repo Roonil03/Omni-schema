@@ -4,7 +4,7 @@ import "strings"
 
 // AdvertisedFormats is the HTTP conversion matrix covered by integration tests.
 var AdvertisedFormats = []string{
-	"json", "msgpack", "protobuf", "graphql", "avro", "odata", "capnproto", "parquet", "hdf5",
+	"json", "msgpack", "protobuf", "graphql", "avro", "odata", "capnproto", "parquet", "hdf5", "cbor",
 }
 
 // NormalizeFormat maps file extensions and aliases to advertised codec names.
@@ -28,6 +28,8 @@ func NormalizeFormat(format string) string {
 		return "odata"
 	case "json":
 		return "json"
+	case "cbor":
+		return "cbor"
 	default:
 		return strings.ToLower(strings.TrimSpace(format))
 	}
@@ -44,7 +46,7 @@ func RequiresExternalSchema(format string) bool {
 
 func IsBinaryFormat(format string) bool {
 	switch NormalizeFormat(format) {
-	case "protobuf", "msgpack", "capnproto", "parquet", "hdf5", "avro":
+	case "protobuf", "msgpack", "capnproto", "parquet", "hdf5", "avro", "cbor":
 		return true
 	default:
 		return false

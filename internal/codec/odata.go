@@ -31,10 +31,6 @@ func GenerateODataWithOptions(n *uir.Node, opts Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var innerData any
-	if err := json.Unmarshal(inner, &innerData); err != nil {
-		return nil, err
-	}
 	typeName := "Entity"
 	if opts.TypeName != "" {
 		typeName = opts.TypeName
@@ -44,7 +40,7 @@ func GenerateODataWithOptions(n *uir.Node, opts Options) ([]byte, error) {
 	payload := map[string]any{
 		"@odata.context": "$metadata#" + typeName,
 		"@odata.type":    "#" + typeName,
-		"value":          innerData,
+		"value":          json.RawMessage(inner),
 	}
 	return json.Marshal(payload)
 }
@@ -54,7 +50,7 @@ func ParseOData(data []byte) (*uir.Node, error) {
 }
 
 func ParseODataWithOptions(data []byte, opts Options) (*uir.Node, error) {
-	var payload map[string]any
+	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return lexer.ParseJSON(data)
 	}
@@ -63,30 +59,32 @@ func ParseODataWithOptions(data []byte, opts Options) (*uir.Node, error) {
 			return lexer.ParseJSON(data)
 		}
 	}
-	value := payload["value"]
-	if value == nil {
-		entity := map[string]any{}
+	valueBytes, hasValue := payload["value"]
+	if !hasValue {
+		entity := map[string]json.RawMessage{}
 		for k, v := range payload {
 			if strings.HasPrefix(k, "@odata") {
 				continue
 			}
 			entity[k] = v
 		}
-		value = entity
-	}
-	valueBytes, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
+		var err error
+		valueBytes, err = json.Marshal(entity)
+		if err != nil {
+			return nil, err
+		}
 	}
 	node, err := parseJSONFlexible(valueBytes)
 	if err != nil {
 		return nil, err
 	}
-	if t, ok := payload["@odata.type"].(string); ok {
+	var typeAnnotation, contextAnnotation string
+	if json.Unmarshal(payload["@odata.type"], &typeAnnotation) == nil {
+		t := typeAnnotation
 		node.SetAnnotation("edm_type", strings.TrimPrefix(t, "#"))
 	}
-	if t, ok := payload["@odata.context"].(string); ok {
-		node.SetAnnotation("odata_context", t)
+	if json.Unmarshal(payload["@odata.context"], &contextAnnotation) == nil {
+		node.SetAnnotation("odata_context", contextAnnotation)
 	}
 	if opts.Schema != nil {
 		projected, err := uir.Project(node, requireType(opts, node), uir.DefaultProjectOptions())
@@ -99,22 +97,6 @@ func ParseODataWithOptions(data []byte, opts Options) (*uir.Node, error) {
 }
 
 func parseJSONFlexible(data []byte) (*uir.Node, error) {
-	var obj map[string]any
-	if err := json.Unmarshal(data, &obj); err == nil {
-		root := uir.NewNode(uir.TypeMap, "Root", nil)
-		lexer.MapToUIR(root, obj)
-		return root, nil
-	}
-	var arr []any
-	if err := json.Unmarshal(data, &arr); err == nil {
-		root := uir.NewNode(uir.TypeArray, "Root", nil)
-		tmp := uir.NewNode(uir.TypeMap, "wrap", nil)
-		lexer.MapToUIR(tmp, map[string]any{"value": arr})
-		if ch := tmp.ChildByKey("value"); ch != nil {
-			return ch, nil
-		}
-		return root, nil
-	}
 	return lexer.ParseJSON(data)
 }
 

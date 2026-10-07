@@ -77,6 +77,11 @@ func DecodePayload(format string, data []byte, opts Options) (*uir.Node, error) 
 
 func EncodePayload(format string, node *uir.Node, opts Options) ([]byte, error) {
 	format = NormalizeFormat(format)
+	if node != nil && node.Annotation("source_format") == "cbor" {
+		if err := ValidateCBORTarget(node, format); err != nil {
+			return nil, err
+		}
+	}
 	if RequiresExternalSchema(format) && opts.RequireType {
 		if opts.Schema == nil {
 			return nil, fmt.Errorf("%s encoding requires a registered schema", format)

@@ -87,6 +87,9 @@ func postMorph(t *testing.T, base, from, to string, payload []byte) []byte {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+	if token := os.Getenv("OMNI_E2E_TOKEN"); token != "" {
+		req.Header.Set("X-API-Token", token)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("%s->%s request: %v", from, to, err)
@@ -95,6 +98,9 @@ func postMorph(t *testing.T, base, from, to string, payload []byte) []byte {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%s->%s status %d: %s", from, to, resp.StatusCode, body)
+	}
+	if to == "cbor" && (resp.Header.Get("Content-Type") != "application/cbor" || len(body) == 0) {
+		t.Fatalf("%s->cbor: invalid response MIME type or empty body", from)
 	}
 	return body
 }

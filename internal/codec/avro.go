@@ -2,8 +2,10 @@ package codec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"omni-schema/internal/uir"
 )
@@ -204,7 +206,7 @@ func encodeAvroScalar(buf *bytes.Buffer, n *uir.Node) error {
 		case float64:
 			f = v
 		}
-		writeAvroDouble(buf, f)
+		buf.Write(binary.LittleEndian.AppendUint32(nil, math.Float32bits(float32(f))))
 	case uir.TypeBytes:
 		b, _ := n.Value.([]byte)
 		writeAvroBytes(buf, b)
@@ -299,7 +301,12 @@ func decodeAvroScalar(name, typ string, data []byte) (*uir.Node, []byte, error) 
 			return nil, data, err
 		}
 		return uir.NewNode(uir.TypeInt64, name, v), data[n:], nil
-	case "float", "double":
+	case "float":
+		if len(data) < 4 {
+			return nil, data, fmt.Errorf("eof avro float")
+		}
+		return uir.NewNode(uir.TypeFloat32, name, math.Float32frombits(binary.LittleEndian.Uint32(data))), data[4:], nil
+	case "double":
 		if len(data) < 8 {
 			return nil, data, fmt.Errorf("eof avro double")
 		}
