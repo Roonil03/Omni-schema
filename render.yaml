@@ -1,10 +1,14 @@
 services:
   - type: web
-    name: morph-gateway
+    # Regions cannot be changed on an existing service. Create this free
+    # Singapore service alongside the original, then migrate clients.
+    name: morph-gateway-sg
+    branch: codex/cbor
     env: docker
     dockerContext: .
     dockerfilePath: ./Docker/Dockerfile
     plan: free
+    region: singapore
     autoDeploy: false
     healthCheckPath: /readyz
     envVars:
