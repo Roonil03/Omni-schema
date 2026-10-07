@@ -1,19 +1,24 @@
-# Project Credits & Acknowledgments
+# Credits
 
-The **Omni-Schema Gateway** is the result of dedicated engineering in systems architecture, compiler design, and high-performance network communication. Built entirely from scratch in Go with zero external dependencies, this project represents a collaborative effort across multiple specialized domains.
+## People
 
----
-### Team:
-1. [Roonil03:](https://github.com/Roonil03) The maintainer and developer of the project.
-2. [Ishaan Vatus:](https://github.com/ishaanvatus) Tester for the project.
-3. [Lakshit Verma:](https://github.com/vee1e) Tester for the project.
+- [Roonil03](https://github.com/Roonil03) maintains and develops the project.
+- [Ishaan Vatus](https://github.com/ishaanvatus) tests the project.
+- [Lakshit Verma](https://github.com/vee1e) tests the project.
 
----
+## Request credit
 
-## Special Acknowledgments
-- **The Go Project Contributors**: For designing and maintaining the robust Go standard library (`net/http`, `text/scanner`, `reflect`), which made building a zero-dependency universal translator possible.
-- **Open-Source Protocol Communities**: For the extensive documentation and specifications across [JSON](https://www.json.org/), [Protocol Buffers](https://protobuf.dev/), [Cap'n Proto](https://capnproto.org/), [MessagePack](https://msgpack.org/), [Apache Parquet](https://parquet.apache.org/), [HDF5](https://www.hdfgroup.org/solutions/hdf5/), and [GraphQL](https://graphql.org/) that guided codec implementation.
+Contributions can include code, tests, documentation, or a reproducible bug report. Follow the [contribution guide](./CONTRIBUTING.md), then include a credit request in your pull request [proposed changes submitted for review] or issue [a tracked problem or suggestion].
 
----
+Provide your preferred name, profile link, and the contribution you want credited. Link the relevant pull request or issue. The maintainer reviews credit requests; submitting a request does not add your name automatically.
 
-*For inquiries, contributions, or architectural feedback, please refer to the official [API Documentation](./API_DOCUMENTATION.md).*
+## Acknowledgments
+
+The [Go project contributors](https://go.dev/) provide the standard library used by this project. The format communities provide the specifications and documentation referenced by the implementations:
+
+- [JSON](https://www.json.org/json-en.html) and [Protocol Buffers](https://protobuf.dev/).
+- [Cap'n Proto](https://capnproto.org/) and [MessagePack](https://msgpack.org/).
+- [Apache Parquet](https://parquet.apache.org/) and [HDF5](https://www.hdfgroup.org/solutions/hdf5/).
+- [GraphQL](https://graphql.org/).
+
+See the [API reference](./API_DOCUMENTATION.md) for supported behavior and the [contribution guide](./CONTRIBUTING.md) for development and testing requirements.
