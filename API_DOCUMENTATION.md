@@ -51,7 +51,16 @@ Any format listed in the left column can be transformed into any format listed a
 
 Sources and targets both accept `json`, `protobuf`, `msgpack`, `graphql`, `avro`, `odata`, `capnproto`, `parquet`, `hdf5`, and `cbor`. Every ordered pair, including identity conversion, is covered by the codec and HTTP matrix tests.
 
-CBOR uses `.cbor` files and `application/cbor`, requires no external schema, and follows the [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html) definite-length subset. It supports text-keyed maps, arrays, UTF-8 strings, byte strings, 64-bit integers, floating-point values, booleans, and null. Tags, indefinite-length containers, arbitrary map keys, duplicate keys, trailing bytes, and nesting deeper than 64 levels are rejected. JSON cannot preserve native byte strings (converted to base64 text) or non-finite floating-point values. These limitations apply when converting CBOR into formats with narrower data models.
+CBOR uses `.cbor` files and `application/cbor`, requires no external schema, and follows the [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html) definite-length subset. It supports text-keyed maps, arrays, UTF-8 strings, byte strings, 64-bit integers, floating-point values, booleans, and null. Tags, indefinite-length containers, arbitrary map keys, duplicate keys, trailing bytes, nesting deeper than 64 levels, and more than 100,000 items (including map keys) are rejected. JSON integers preserve signed/unsigned 64-bit values exactly; integers outside that range and overflowing floating-point literals return 400.
+
+CBOR conversion into a narrower target model returns 400 for unsupported combinations instead of silently returning corrupt output:
+
+- JSON/OData use base64 text for byte strings and reject NaN/Infinity. Empty arrays remain arrays.
+- Protobuf/Cap'n Proto require a registered schema for faithful field names/types; explicit null values are rejected. Cap'n Proto requires a struct object.
+- Parquet/HDF5/Avro subsets accept flat records or homogeneous arrays of flat records. Nested containers, inconsistent record fields/types, and unsigned integers above `MaxInt64` are rejected. Parquet/HDF5 reject explicit null fields; Parquet also rejects native byte strings. Container output may decode as a record array even for a single input object.
+- The HTTP GraphQL target synthesizes SDL, not a value-preserving GraphQL result. Scalar roots, empty objects, and invalid GraphQL field names are rejected.
+
+Schema-aware payload projection returns the selected object's fields directly, without an artificial wrapper. Select `sourceSchema`/`sourceType` for decoding schema-bound binary data and `targetSchema`/`targetType` for projection; a shared `schema`/`type` applies to both sides.
 
 ---
 

@@ -38,6 +38,8 @@ curl --fail-with-body -X POST http://localhost:8080/morph/cbor/json \
   -H "Content-Type: application/cbor" --data-binary @data.cbor -o roundtrip.json
 ```
 
+Use `--data-binary`, rather than `-d @file`, to preserve all CBOR bytes. Raw requests, file uploads, query routing, form routing, and `.CBOR` extension inference are covered by regression tests. Large 64-bit JSON integers and nested empty arrays are preserved. Invalid CBOR and combinations outside the [target codec subsets](../API_DOCUMENTATION.md#complete-conversion-matrix-100-pairwise-routes) return 400; they should not be treated as successful downloads. JSON byte strings are represented as base64 text. HTTP GraphQL output is a generated schema, not a payload round trip.
+
 ## Use a Protobuf schema
 
 Create `user.proto`:

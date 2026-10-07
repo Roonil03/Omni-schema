@@ -170,6 +170,10 @@ Every “supported” decode/encode path has automated round-trip coverage in `i
 | Parquet | yes | yes | optional | yes | **OpBinary** batched file | Omni Parquet subset v1 (`PAR1`, PLAIN pages) — not parquet-cli certified |
 | HDF5 | yes | yes | optional | yes | **OpBinary** batched file | signature + superblock v0 + contiguous datasets — not h5dump certified |
 
+### CBOR verification
+
+CBOR regression coverage verifies actual values across all ten formats, including signed/unsigned 64-bit boundaries, Unicode, nested maps/arrays, empty arrays, nulls, native bytes, and float16/32/64 inputs. Raw-body and multipart curl round trips are checked against Docker. Invalid data and target-subset combinations that would discard values are rejected; see the [CBOR limitations](./API_DOCUMENTATION.md#complete-conversion-matrix-100-pairwise-routes). CBOR parsing and encoding are capped at 100,000 items, including map keys, and 64 nesting levels. HTTP bodies are capped at 10 MiB.
+
 ### Streaming semantics
 
 - **Delivery**: **at-most-once / best-effort**. Bounded queues; DropOldest on overflow. Event IDs are deduplicated per subscription.
