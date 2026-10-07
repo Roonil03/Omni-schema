@@ -465,21 +465,29 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 		projOpts := uir.DefaultProjectOptions()
 		projOpts.UnknownFields = uir.UnknownFieldIgnore
 		projOpts.EmitNullForMissing = true
+		if target == "protobuf" || target == "capnproto" {
+			projOpts.EmitNullForMissing = false
+		}
 		projOpts.SchemaRoot = tgtMeta.Root
 		projOpts.Report = report
-		planKey := uir.PlanCacheKey(sourceSchemaParam, sourceType, targetSchemaParam, targetType, "", tgtMeta.Version)
+		sourceName, sourceVersion := "", ""
+		if srcMeta != nil {
+			sourceName, sourceVersion = srcMeta.Name, srcMeta.Version
+		}
+		planKey := uir.PlanCacheKey(sourceName, sourceType, tgtMeta.Name, targetType, sourceVersion, tgtMeta.Version)
 		plan := uir.GetOrCompilePlan(planKey, dataNode, schemaTarget, projOpts)
+		// Cached plans must not retain a report shared by concurrent requests.
+		requestPlan := *plan
+		requestPlan.Options.Report = report
 		t1 := time.Now()
-		projected, err := uir.ApplyPlan(dataNode, plan)
+		projected, err := uir.ApplyPlan(dataNode, &requestPlan)
 		telemetry.ObserveConvert(time.Since(t1))
 		if err != nil {
 			telemetry.ConversionFailures.Add(1)
 			http.Error(w, fmt.Sprintf("Schema validation/projection error: %v", err), 400)
 			return
 		}
-		rootWrapper := uir.NewNode(uir.TypeMap, "root", nil)
-		rootWrapper.AddChild(projected)
-		outputNode = rootWrapper
+		outputNode = projected
 	}
 
 	encOpts := codec.Options{TypeName: targetType, RequireType: codec.RequiresExternalSchema(target) && tgtMeta != nil}
@@ -489,6 +497,13 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 
 	t2 := time.Now()
 	var out []byte
+	if source == "cbor" {
+		if err := codec.ValidateCBORTarget(outputNode, target); err != nil {
+			telemetry.ConversionFailures.Add(1)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if target == "graphql" {
 		out, err = codec.GenerateGraphQLSDL(outputNode)
 	} else {
@@ -496,7 +511,12 @@ func morphHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	telemetry.ObserveEncode(time.Since(t2))
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error synthesizing %s: %v", target, err), 500)
+		status := http.StatusInternalServerError
+		if source == "cbor" || target == "cbor" {
+			status = http.StatusBadRequest
+		}
+		telemetry.ConversionFailures.Add(1)
+		http.Error(w, fmt.Sprintf("Error synthesizing %s: %v", target, err), status)
 		return
 	}
 	if len(out) == 0 {
@@ -551,7 +571,10 @@ func resolveMorphType(root *uir.Node, typeName string) *uir.Node {
 func readMorphBody(w http.ResponseWriter, r *http.Request) ([]byte, string, error) {
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "multipart/form-data") {
-		_ = r.ParseMultipartForm(10 << 20)
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			return nil, "", fmt.Errorf("invalid multipart payload: %w", err)
+		}
+		defer r.MultipartForm.RemoveAll()
 		file, header, fileErr := r.FormFile("file")
 		if fileErr == nil {
 			defer file.Close()
