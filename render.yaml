@@ -1,9 +1,8 @@
 services:
   - type: web
-    # Regions cannot be changed on an existing service. Create this free
-    # Singapore service alongside the original, then migrate clients.
+    # Render regions are immutable; create a new free Singapore service.
     name: morph-gateway-sg
-    branch: codex/cbor
+    branch: main
     env: docker
     dockerContext: .
     dockerfilePath: ./Docker/Dockerfile
