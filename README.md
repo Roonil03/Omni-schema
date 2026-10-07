@@ -1,236 +1,154 @@
 # Omni-Schema
 
-![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
-![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=for-the-badge&logo=go&logoColor=white)
-![Protocols](https://img.shields.io/badge/Protocols-10-blue?style=for-the-badge)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](./LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=for-the-badge&logo=go&logoColor=white)](./go.mod)
+[![Formats](https://img.shields.io/badge/Formats-10-blue?style=for-the-badge)](./internal/codec/formats.go)
 
-Omni-Schema is an advanced, high-performance API morphing service built entirely from scratch in Go with zero external dependencies. Operating on an Analysis-Synthesis compiler model, the gateway translates arbitrary payloads between highly complex binary and text protocols.
+Omni-Schema converts data between ten text and binary formats through an HTTP API [URLs you call to send or receive data]. Send a file or request body and download the converted output. It also stores schemas [field names and types] and sends live events over WebSockets [connections that stay open for live messages]. See the [API reference](./API_DOCUMENTATION.md).
 
----
+The server is written in Go and uses only the standard library. See [go.mod](./go.mod) and the [server code](./cmd/server/main.go).
 
-## Features
+[API reference](./API_DOCUMENTATION.md) · [Examples](./examples/README.md) · [Contributing](./CONTRIBUTING.md) · [Credits](./Credits.md)
 
-The gateway acts as a universal schema and payload translator. It parses incoming structures into a Universal Intermediate Representation (UIR) memory graph, enabling seamless, native morphing between disparate protocols.
+## Run locally
 
-Supported formats and protocols include:
-- **Standard Text Formats**: [JSON](https://www.json.org/), [Protobuf](https://protobuf.dev/)
-- **Zero-Copy & Memory-Aligned**: [Cap'n Proto](https://capnproto.org/)
-- **Schemaless Binary**: [MessagePack](https://msgpack.org/)
-- **Compact Binary**: [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html), with bidirectional conversion to every other format (100 routes total)
-- **Columnar & Big Data**: [Apache Parquet](https://parquet.apache.org/)
-- **Hierarchical Multidimensional**: [HDF5](https://www.hdfgroup.org/solutions/hdf5/)
-- **Data Serialization**: [Apache Avro](https://avro.apache.org/)
-- **REST APIs**: [OData](https://www.odata.org/)
-- **Real-Time Streaming**: Native [GraphQL](https://graphql.org/) Subscriptions running over custom RFC 6455 WebSockets
-
----
-
-## Quick Start (Live Render API)
-
-The Omni-Schema Gateway is hosted on Render. Production endpoints are protected by an API token; obtain a token from the deployment owner and send it as `Authorization: Bearer` or `X-API-Token`.
-
-**Production Base URL**: `https://morph-gateway.onrender.com`
-
-> [!TIP]
-> **Windows Users**: In PowerShell, `curl` is often an alias for `Invoke-WebRequest`. To use standard cURL flags like `-O -J`, type `curl.exe` instead of `curl`.
-
-### How to Properly Use the API (Important Rules)
-To ensure seamless file uploads and conversions without client-side or parsing errors, follow these essential guidelines:
-1. **Execute from the Directory Containing Your File**: When passing `-F "file=@filename"`, cURL searches for `filename` inside your **current working directory**. Ensure you `cd` into the folder where your file is located before running the command (otherwise cURL throws error `(26) Failed to open/read local data`).
-2. **Do NOT Override Multipart Headers**: Do **not** manually add `-H "Content-Type: multipart/form-data"` when using `-F`. cURL automatically generates the required multipart boundary parameter (e.g., `boundary=------------------------abcdef1234567890`). Overriding this header strips the boundary parameter, causing backend server parsing failures.
-3. **Use `-O -J` for Automatic Local Downloads**: Adding `-O -J` (`--remote-name --remote-header-name`) tells cURL to read the server's `Content-Disposition` header and automatically download and save the converted file directly into your calling folder with its base name preserved (e.g., uploading `data.json` converts and saves locally as `data.graphql`).
-
----
-
-### Complete Terminal Walkthrough (Example as `user1@user`)
-
-Here is an end-to-end example demonstrating how a developer (`user1@user`) creates a file in their terminal, converts it via the live Render API, and receives the translated schema directly in their working directory:
+Clone the repository and start the server with Docker Compose:
 
 ```bash
-# Step 1: Check your current working directory and create a sample JSON payload
-user1@user:~$ pwd
-/home/user1
-user1@user:~$ echo '{"id": 101, "name": "Alice", "role": "admin", "active": true}' > data.json
-
-# Step 2: Upload data.json to convert it to GraphQL (using -O -J)
-# Notice we do NOT add -H "Content-Type: multipart/form-data"!
-user1@user:~$ curl -O -J -X POST https://morph-gateway.onrender.com/morph/json/graphql \
-  -H "Authorization: Bearer $OMNI_API_TOKEN" \
-  -F "file=@data.json"
-
-# Step 3: Check your directory: data.graphql was automatically downloaded and saved!
-user1@user:~$ ls -l
-total 8
--rw-r--r-- 1 user1 user 64 Jul  8 12:30 data.graphql
--rw-r--r-- 1 user1 user 65 Jul  8 12:30 data.json
-
-# Step 4: View the converted GraphQL schema
-user1@user:~$ cat data.graphql
-type Root {
-  id: Float!
-  name: String!
-  role: String!
-  active: Boolean!
-}
-```
-
-#### Alternative Routing: Form Parameters
-You can also specify the target format via form parameters instead of the URL path. If the source format is omitted, the server automatically detects it from your file's extension (`.json` -> `json`):
-
-```bash
-user1@user:~$ curl -O -J -X POST https://morph-gateway.onrender.com/morph \
-  -H "Authorization: Bearer $OMNI_API_TOKEN" \
-  -F "file=@data.json" \
-  -F "target=protobuf"
-```
-
----
-
-### Uploading Custom Schemas
-If your target protocols require explicit structural definitions (such as custom Protobuf `.proto` or Cap'n Proto `.capnp` schemas), upload them to the system registry using a standard multipart form request:
-
-```bash
-user1@user:~$ curl -X POST https://morph-gateway.onrender.com/system/schema \
-  -H "Authorization: Bearer $OMNI_API_TOKEN" \
-  -F "file=@custom_schema.proto"
-```
-
----
-
-## Local Development & Self-Hosting
-
-For developers and contributors wishing to run or extend Omni-Schema locally, the project is engineered with zero external dependencies using standard Go library packages.
-
-### Prerequisites
-- **Go**: Version 1.25 or newer
-- **Docker** *(Optional)*: For containerized deployments
-
-### Running Locally with Go
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/Roonil03/Omni-schema.git
-   cd Omni-schema
-   ```
-2. Start the server (defaults to port `8080`):
-   ```bash
-   # Linux / macOS / Git Bash
-   PORT=8080 go run cmd/server/main.go
-
-   # Windows PowerShell
-   $env:PORT="8080"; go run cmd/server/main.go
-   ```
-3. Test your local instance:
-   ```bash
-   curl -O -J -X POST http://localhost:8080/morph/json/graphql \
-     -F "file=@data.json"
-   ```
-
-### Running with Docker
-Build and run the multi-stage container:
-```bash
-docker build -f Docker/Dockerfile -t omni-schema .
-docker run -p 8080:8080 -e PORT=8080 omni-schema
-```
-
-Or from the repository root with Compose (local morph without an API token):
-```bash
+git clone https://github.com/Roonil03/Omni-schema.git
+cd Omni-schema
 docker compose -f Docker/docker-compose.yml up --build
 ```
-Production Compose should set `OMNI_ENV=production` and `OMNI_API_TOKEN`.
 
----
+The supplied [Compose configuration](./Docker/docker-compose.yml) exposes `http://localhost:8080`, stores registered schemas in a persistent volume [storage kept when containers are replaced], and disables development event injection. Local conversion requests do not require an API token [secret used to authorize requests].
 
-## Documentation & Architecture
+To run without Docker, install the Go version listed in [go.mod](./go.mod), then run:
 
-For detailed API specifications, supported format matrices, WebSocket subscription protocols, and error code references, consult the official documentation:
+```bash
+go run ./cmd/server
+```
 
-- **[API Documentation](./API_DOCUMENTATION.md)**: Full endpoint reference, capability matrix, and subset boundaries.
-- **[Credits](./Credits.md)**: Acknowledgments and roles of the engineering team members who contributed to this project.
-- **GraphQL Schema Ingestion**: Parses GraphQL SDL, including `interface`, `union`, `enum`, `input`, `scalar`, `schema`, fragments, aliases, and nested types (`[[Type!]!]!`).
-- **Protobuf Integration**: Schema-driven translation (`.proto` files) preserving field numbers, wire types, signedness, enums, oneofs, maps, nested types, and services.
-- **WebSocket Streaming**: Custom RFC 6455 broker with masked-client enforcement, close handshake, deadlines, at-most-once delivery (`DropOldest`), and format conversion.
-- **Codecs**: JSON, MessagePack, Protobuf, Avro OCF, OData JSON subset, GraphQL SDL/result, plus scoped Parquet/HDF5/Cap'n Proto implementations with round-trip tests.
-- **Production Telemetry**: `/healthz`, `/readyz`, `/metrics` (counters + parse/convert/encode/stream P50/P95/P99), request IDs, payload limits, structured `slog`.
-- **Zero Third-Party Dependencies**: The entire project uses only the Go standard library.
+The [server](./cmd/server/main.go) defaults to port `8080`. Set `PORT` to change it.
 
-### Capability matrix
+## Convert data
 
-Every “supported” decode/encode path has automated round-trip coverage in `internal/codec`. Status is **subset** unless noted.
+Save this as `data.json`:
 
-| Format | Decode | Encode | Schema | HTTP morph | Streaming | Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| JSON | yes | yes | optional | yes | 1 event / text frame | complete for objects/arrays |
-| MessagePack | yes | yes | no | yes | 1 **OpBinary** envelope | complete schemaless subset |
-| CBOR | yes | yes | no | yes | 1 **OpBinary** envelope | RFC 8949 definite-length subset; text map keys, depth limit 64; rejects tags and indefinite lengths |
-| Protobuf | yes | yes | required for faithful types | yes | 1 **OpBinary** envelope | schema-driven; subset `.proto` language |
-| GraphQL | result JSON | SDL (morph) / result (stream) | SDL | yes | GraphQL-over-WS **text** envelope | subscription selection/projection; not a full execution engine |
-| Avro | OCF | OCF | embedded + optional UIR | yes | **OpBinary** batched OCF | Object Container File, null codec |
-| OData | JSON payload | JSON payload | EDM annotations | yes | JSON **text** envelope | **OData JSON response subset** (`@odata.context`, `@odata.type`, `value`) — not `$filter`/`$expand` |
-| Cap'n Proto | yes | yes | schema for faithful layout | yes | 1 **OpBinary** envelope | single-segment struct/Text/List subset |
-| Parquet | yes | yes | optional | yes | **OpBinary** batched file | Omni Parquet subset v1 (`PAR1`, PLAIN pages) — not parquet-cli certified |
-| HDF5 | yes | yes | optional | yes | **OpBinary** batched file | signature + superblock v0 + contiguous datasets — not h5dump certified |
+```json
+{"id":42,"name":"Ada","active":true}
+```
 
-### CBOR verification
+Convert it to CBOR [compact binary data format], then convert the result back to JSON:
 
-CBOR regression coverage verifies actual values across all ten formats, including signed/unsigned 64-bit boundaries, Unicode, nested maps/arrays, empty arrays, nulls, native bytes, and float16/32/64 inputs. Raw-body and multipart curl round trips are checked against Docker. Invalid data and target-subset combinations that would discard values are rejected; see the [CBOR limitations](./API_DOCUMENTATION.md#complete-conversion-matrix-100-pairwise-routes). CBOR parsing and encoding are capped at 100,000 items, including map keys, and 64 nesting levels. HTTP bodies are capped at 10 MiB.
+```bash
+curl --fail-with-body http://localhost:8080/morph/json/cbor \
+  -H "Content-Type: application/json" \
+  --data-binary @data.json -o data.cbor
 
-### Streaming semantics
+curl --fail-with-body http://localhost:8080/morph/cbor/json \
+  -H "Content-Type: application/cbor" \
+  --data-binary @data.cbor -o roundtrip.json
+```
 
-- **Delivery**: **at-most-once / best-effort**. Bounded queues; DropOldest on overflow. Event IDs are deduplicated per subscription.
-- **Replay/resume**: **none**. `cursor` in envelopes is informational only; reconnecting clients start live.
-- **Ordering**: per subscription, in publish order, until a drop occurs.
-- **JSON / OData**: one event per **text** frame (transport envelope).
-- **GraphQL**: UIR → GraphQL result `{data:{<alias>: ...}}` → `{"type":"next","id","payload"}` text envelope. Multi-root subscriptions fan out by matching `eventType` to each root field name. Operations must be `subscription`; parse errors and unknown fields are rejected.
-- **Binary targets** (Protobuf, MessagePack, CBOR, Cap'n Proto, Avro, Parquet, HDF5): **OpBinary** frames with an `OMNI` header (`eventId`, `format`, `schemaVersion`) then raw codec bytes — **not** Base64-in-JSON.
-- **Parquet / HDF5 / Avro**: default `batchSize=16` (override with `?batchSize=`); a batch encodes one container file.
-- **Schema version**: bound at subscribe time. If that version is deleted, the subscription receives an error and is closed.
-- **Liveness**: server pings every 20s; RFC close handshake on `OpClose`.
-- **`/dev/events`**: `?source=` selects any advertised decoder. Render sets `OMNI_DEV_EVENTS=0`; production injection requires both `OMNI_DEV_EVENTS=1` and a valid API token.
+Use `--data-binary` when sending binary files. For file uploads, use `-F`; curl supplies the upload headers. `-OJ` saves the response with the filename provided by the server. These request forms are described in the [conversion reference](./API_DOCUMENTATION.md#1-payload--schema-morphing).
 
-### Schema-dependent codecs
+```bash
+curl --fail-with-body -OJ http://localhost:8080/morph/json/msgpack \
+  -F "file=@data.json"
+```
 
-- `?sourceSchema=` / `?targetSchema=` and `?sourceType=` / `?targetType=` (or shared `?schema=` / `?type=`).
-- Missing named types return an error (no `Children[0]` fallback). Ambiguous schemas require `type=`.
-- Protobuf and Cap'n Proto use the registered schema as the transformation contract when provided.
-- Persisted registry reconstruction **fails closed** for unsupported formats.
+Replace `json` and `msgpack` in `/morph/{source}/{target}` with any [format identifier](./API_DOCUMENTATION.md#supported-formats--aliases). The server also accepts form fields and query parameters. See the [examples](./examples/README.md#convert-a-payload).
 
-### Auth and tenants
+The commands above use Bash line continuation. In Windows PowerShell, use `curl.exe` and put each command on one line.
 
-- `OMNI_ENV=production` requires `OMNI_API_TOKEN` on morph, schema, events, and subscriptions.
-- Optional `X-Tenant-ID` namespaces schema names (`tenant/name`).
+## Formats and limits
 
-### Environment
+The [format registry](./internal/codec/formats.go) lists ten source and target formats. The [HTTP conversion test](./cmd/server/morph_matrix_test.go) covers all 100 ordered pairs, including conversion to the same format. Format support has limits; passing a route test does not mean every possible value can be represented.
 
-| Variable | Purpose |
-| :--- | :--- |
-| `PORT` | Listen port (default `8080`) |
-| `REGISTRY_PATH` | Schema registry JSON file (default `registry_store.json`) |
-| `OMNI_API_TOKEN` | In production, required as `Authorization: Bearer` or `X-API-Token` for morphing, schemas, event injection, and subscriptions |
-| `OMNI_ENV` | `production` disables `/dev/events` unless overridden |
-| `OMNI_DEV_EVENTS` | `0` disables inject; `1` allows it in production |
+- JSON, [MessagePack](./internal/codec/msgpack.go), and [CBOR](./internal/codec/cbor.go) carry data values. CBOR supports objects with text keys, arrays, strings, bytes, 64-bit integers, floating-point numbers, booleans, and null. It rejects tags [extra type labels], containers without a declared size, duplicate keys, and trailing data.
+- [Protobuf](./internal/codec/protobuf.go) and [Cap'n Proto](./internal/codec/capnproto.go) need a registered schema to preserve field names and types faithfully.
+- [GraphQL](./API_DOCUMENTATION.md#complete-conversion-matrix-100-pairwise-routes) conversion produces SDL [text that defines GraphQL types]. It describes the data's structure; it does not return the original values. GraphQL subscriptions return selected event data.
+- [Avro](./internal/codec/avro.go), [Parquet](./internal/codec/parquet.go), and [HDF5](./internal/codec/hdf5.go) implement limited file formats. CBOR conversion to these targets accepts flat records or arrays of records with matching fields and types. Parquet and HDF5 are not certified against external readers.
+- [OData](./internal/codec/odata.go) supports JSON response envelopes [objects containing data and metadata]. It does not execute OData queries such as `$filter` or `$expand`.
 
-The Render Blueprint selects the **free Singapore region** and keeps authentication enabled. Free Render storage at `/tmp/registry_store.json` is ephemeral; schemas must be re-registered after restarts, redeploys, or idle shutdowns. Local Docker Compose retains its persistent named volume.
+Read the [format limits](./API_DOCUMENTATION.md#complete-conversion-matrix-100-pairwise-routes) before choosing a target. For example, JSON cannot represent NaN [a special value meaning not a number] or Infinity, and Protobuf cannot preserve explicit null values. CBOR conversions outside the supported target model return `400 Bad Request`. CBOR limits are 64 nesting levels and 100,000 items, including map keys. Conversion request bodies are limited to 10 MiB. See the [CBOR validation code](./internal/codec/cbor_target.go), [CBOR parser](./internal/codec/cbor.go), and [request handler](./cmd/server/main.go).
 
-Render cannot move an existing service between regions. Create a new free Docker web service in Singapore from branch `codex/cbor`, using this Blueprint, and obtain its generated API token. Changing `region` in this repository alone does not migrate the current service. See [Render regions](https://render.com/docs/regions).
+## Use a schema
 
-### Architecture Snapshot
-- **Lexers & ASTs**: Constructed natively utilizing `text/scanner` without third-party parsing libraries.
-- **Lowering Engine**: Maps complex schema abstractions down to a universal `uir.TypeMap` and `uir.TypeArray`.
-- **Codecs**: Synthesizes heavily specified binary and text byte representations directly from the UIR memory pool.
-- **WebSockets**: Implements TCP hijacking via `net/http` to securely facilitate real-time GraphQL subscription channels.
+Register a `.proto`, `.capnp`, or `.graphql` file, then select it when converting. The following commands use `user.proto` and the `User` type defined in the [Protobuf example](./examples/README.md#use-a-protobuf-schema):
 
-### Performance snapshot — 2026-10-07
+```bash
+curl --fail-with-body http://localhost:8080/system/schema \
+  -F "name=user" -F "file=@user.proto"
 
-Warm HTTP samples use the 33-byte JSON payload `{"name":"Ada","id":42,"ok":true}` and a reused HTTP client at concurrency 10. The refreshed Docker JSON → CBOR run uses three warm-up requests followed by 100 measured requests in ten batches. Latency includes the complete response body. The earlier Render JSON → GraphQL sample used one warm-up request and 30 measured requests in three batches on the existing `morph-gateway.onrender.com` service. These are small snapshots from this machine, not production capacity guarantees. The existing Render service does not support CBOR yet (HTTP 400); its region is unverified. Singapore CBOR metrics remain pending deployment from `codex/cbor`. The Blueprint on `main` builds `main`; select `codex/cbor` to deploy this additional format.
+curl --fail-with-body -OJ \
+  "http://localhost:8080/morph/json/protobuf?schema=user&type=User" \
+  -F "file=@data.json"
+```
 
-The CBOR round-trip microbenchmark uses the same three-field object directly in the codec, with Go 1.25 on Linux/amd64 in Docker on an Intel i9-11900H. It measures encoding plus decoding, excluding HTTP and network latency. Three runs measured 1,177, 1,342, and 1,259 ns/op; the badge reports their median, 1,259 ns/op. Each run allocated 1,504 bytes and 31 allocations per operation. To reproduce: `go test ./internal/codec -run '^$' -bench BenchmarkCBORRoundTrip -benchmem -count=3`. Run the full container matrix with `OMNI_E2E=1 OMNI_E2E_URL=http://localhost:8080 go test ./cmd/server -run TestComposeMorphMatrix`; for authenticated deployments, supply `OMNI_E2E_TOKEN`.
+Use `sourceSchema` and `sourceType` for decoding, or `targetSchema` and `targetType` for output. The shared `schema` and `type` parameters apply to both. Fields outside the selected schema may be dropped, so choose the schema that matches your data. See [schema registration](./API_DOCUMENTATION.md#2-custom-schema-ingestion) and the [projection code](./internal/uir/project.go).
 
-![Docker HTTP conversion routes](https://img.shields.io/badge/Docker_HTTP_routes-100%2F100_passed-brightgreen)
+## Live events
+
+Connect to `/graphql/subscriptions` to receive events in a selected format. The included [WebSocket client](./examples/websocket-client/main.go) and [event examples](./examples/README.md#subscribe-to-live-events) show how to subscribe and publish locally.
+
+Delivery is best effort. Full queues drop older events, and reconnecting does not replay missed events. See the [event broker](./internal/stream/broker.go) and [subscription handler](./cmd/server/main.go).
+
+## Deploy and operate
+
+Set `OMNI_ENV=production` and `OMNI_API_TOKEN` for a public deployment. Protected requests accept `Authorization: Bearer <token>` or `X-API-Token`. Keep `/dev/events` disabled on public deployments. These checks are implemented in the [server](./cmd/server/main.go).
+
+The [Render configuration](./render.yaml) uses the free Singapore plan, builds `main`, and disables automatic deployment and event injection. It stores schemas at `/tmp/registry_store.json`; keep schema files for re-registration because this deployment does not configure persistent storage. Use [Docker Compose](./Docker/docker-compose.yml) for the supplied persistent local setup.
+
+For the [hosted endpoint](https://morph-gateway.onrender.com), obtain a token from the deployment owner and follow the [hosted request example](./examples/README.md#call-the-hosted-deployment). Confirm that the deployed version supports your chosen format.
+
+The [server](./cmd/server/main.go) provides these monitoring endpoints:
+
+- `GET /healthz` checks that the server is running.
+- `GET /readyz` checks that the schema registry is initialized.
+- `GET /metrics` returns request counts and timing measurements.
+
+`REGISTRY_PATH` sets the schema storage file. Rate-limited requests return `429` with a `Retry-After` header. See the [API reference](./API_DOCUMENTATION.md#operations--telemetry) and [rate-limit tests](./cmd/server/rate_limit_test.go).
+
+## Code and tests
+
+Data is parsed into UIR [shared in-memory data representation], optionally mapped to a schema, and encoded in the target format. Follow the implementation through [parsers](./internal/lexer), [UIR and schema mapping](./internal/uir), [format encoders and decoders](./internal/codec), and the [HTTP server](./cmd/server/main.go).
+
+Run tests and static checks [checks without running the server] from the repository root:
+
+```bash
+go test -race ./...
+go vet ./...
+```
+
+With the local server running, test all HTTP conversion routes and measure CBOR encoding plus decoding:
+
+```bash
+OMNI_E2E=1 OMNI_E2E_URL=http://localhost:8080 \
+  go test ./cmd/server -run TestComposeMorphMatrix -count=1
+
+go test ./internal/codec -run '^$' -bench BenchmarkCBORRoundTrip -benchmem -count=3
+```
+
+For a protected server, set `OMNI_E2E_TOKEN` as well. See the [HTTP tests](./cmd/server/morph_matrix_test.go), [CBOR value tests](./internal/codec/cbor_variations_test.go), [request tests](./cmd/server/cbor_variations_test.go), and [benchmark](./internal/codec/cbor_test.go). Contribution requirements are in [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Credits and license
+
+The project is maintained and developed by [Roonil03](https://github.com/Roonil03). [Ishaan Vatus](https://github.com/ishaanvatus) and [Lakshit Verma](https://github.com/vee1e) are credited as testers. The full team credits and acknowledgments remain in [Credits.md](./Credits.md). Omni-Schema is licensed under the [MIT license](./LICENSE).
+
+## Performance
+
+The HTTP measurements use `{"name":"Ada","id":42,"ok":true}` at 10 concurrent requests. Docker measures JSON to CBOR over 100 requests; the hosted sample measures JSON to GraphQL over 30 requests. Times include the response body. These small-payload samples do not establish production capacity. The [recorded measurements](https://github.com/Roonil03/Omni-schema/blob/54b06cde4518cca5b0748dc34d153c70c62dcfcb/README.md) include the setup and sample sizes.
+
+p50 [half of requests finish within this time], p95 [95 percent finish within this time], and p99 [99 percent finish within this time] describe request latency [time until the response is fully received]. The CBOR round-trip benchmark measures encoding plus decoding without HTTP or network time. Its badge reports the median of three runs. See the [benchmark code](./internal/codec/cbor_test.go).
+
+![Measurement date](https://img.shields.io/badge/Measured-2026--10--07-lightgrey)
+[![Docker HTTP conversion routes](https://img.shields.io/badge/Docker_HTTP_routes-100%2F100_passed-brightgreen)](./cmd/server/morph_matrix_test.go)
 ![Docker CBOR p50 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p50_c10-0.660_ms-blue)
 ![Docker CBOR p95 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p95_c10-3.414_ms-blue)
 ![Docker CBOR p99 at concurrency 10](https://img.shields.io/badge/Docker_CBOR_p99_c10-6.840_ms-blue)
 ![Docker CBOR success](https://img.shields.io/badge/Docker_CBOR_success-100%2F100-brightgreen)
-![Existing Render GraphQL p50 at concurrency 10](https://img.shields.io/badge/Existing_Render_GraphQL_p50_c10-268.182_ms-blue)
-![Existing Render GraphQL p95 at concurrency 10](https://img.shields.io/badge/Existing_Render_GraphQL_p95_c10-778.669_ms-blue)
-![Existing Render GraphQL success](https://img.shields.io/badge/Existing_Render_GraphQL_success-30%2F30-brightgreen)
-![CBOR codec round trip](https://img.shields.io/badge/CBOR_codec_round_trip-1259_ns%2Fop-blue)
+![Hosted GraphQL p50 at concurrency 10](https://img.shields.io/badge/Hosted_GraphQL_p50_c10-268.182_ms-blue)
+![Hosted GraphQL p95 at concurrency 10](https://img.shields.io/badge/Hosted_GraphQL_p95_c10-778.669_ms-blue)
+![Hosted GraphQL success](https://img.shields.io/badge/Hosted_GraphQL_success-30%2F30-brightgreen)
+[![CBOR codec round trip](https://img.shields.io/badge/CBOR_codec_round_trip-1259_ns%2Fop-blue)](./internal/codec/cbor_test.go)
