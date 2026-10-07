@@ -33,7 +33,7 @@ func uirToInterface(n *uir.Node) any {
 		return m
 	}
 	if n.Type == uir.TypeArray {
-		var arr []any
+		arr := make([]any, 0, len(n.Children))
 		for _, child := range n.Children {
 			arr = append(arr, uirToInterface(child))
 		}

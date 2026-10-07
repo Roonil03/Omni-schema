@@ -83,7 +83,24 @@ func TestCBORRejectsInvalidInput(t *testing.T) {
 
 func FuzzCBOR(f *testing.F) {
 	f.Add([]byte{0xa1, 0x61, 'a', 0x01})
-	f.Fuzz(func(t *testing.T, raw []byte) { _, _ = ParseCBOR(raw) })
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		n, err := ParseCBOR(raw)
+		if err != nil {
+			return
+		}
+		out, err := GenerateCBOR(n)
+		if err != nil {
+			t.Fatalf("accepted input cannot encode: %v", err)
+		}
+		back, err := ParseCBOR(out)
+		if err != nil {
+			t.Fatalf("encoder produced invalid output: %v", err)
+		}
+		stable, err := GenerateCBOR(back)
+		if err != nil || !bytes.Equal(out, stable) {
+			t.Fatalf("unstable roundtrip: %x -> %x (%v)", out, stable, err)
+		}
+	})
 }
 
 func BenchmarkCBORRoundTrip(b *testing.B) {

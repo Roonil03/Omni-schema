@@ -14,9 +14,11 @@ import (
 // CBOR supports the RFC 8949 definite-length, text-keyed data model.
 // Tags, indefinite lengths and non-text map keys are rejected explicitly.
 const cborMaxDepth = 64
+const cborMaxItems = 100000
 
 func GenerateCBOR(n *uir.Node) ([]byte, error) {
-	return appendCBOR(nil, n, 0)
+	budget := cborMaxItems
+	return appendCBOR(nil, n, 0, &budget)
 }
 
 func cborHead(dst []byte, major byte, value uint64) []byte {
@@ -34,7 +36,11 @@ func cborHead(dst []byte, major byte, value uint64) []byte {
 	}
 }
 
-func appendCBOR(dst []byte, n *uir.Node, depth int) ([]byte, error) {
+func appendCBOR(dst []byte, n *uir.Node, depth int, budget *int) ([]byte, error) {
+	(*budget)--
+	if *budget < 0 {
+		return nil, fmt.Errorf("cbor: item count exceeds %d", cborMaxItems)
+	}
 	if depth > cborMaxDepth {
 		return nil, fmt.Errorf("cbor: nesting exceeds %d", cborMaxDepth)
 	}
@@ -45,6 +51,9 @@ func appendCBOR(dst []byte, n *uir.Node, depth int) ([]byte, error) {
 		children := make([]*uir.Node, 0, len(n.Children))
 		seen := make(map[string]bool)
 		for _, child := range n.Children {
+			if child == nil {
+				return nil, fmt.Errorf("cbor: nil map field")
+			}
 			if child.Presence == uir.PresenceMissing {
 				continue
 			}
@@ -57,12 +66,16 @@ func appendCBOR(dst []byte, n *uir.Node, depth int) ([]byte, error) {
 		sort.Slice(children, func(i, j int) bool { return children[i].Key < children[j].Key })
 		dst = cborHead(dst, 5, uint64(len(children)))
 		for _, child := range children {
+			(*budget)--
+			if *budget < 0 {
+				return nil, fmt.Errorf("cbor: item count exceeds %d", cborMaxItems)
+			}
 			if !utf8.ValidString(child.Key) {
 				return nil, fmt.Errorf("cbor: invalid UTF-8 key")
 			}
 			dst = append(cborHead(dst, 3, uint64(len(child.Key))), child.Key...)
 			var err error
-			dst, err = appendCBOR(dst, child, depth+1)
+			dst, err = appendCBOR(dst, child, depth+1, budget)
 			if err != nil {
 				return nil, err
 			}
@@ -73,7 +86,7 @@ func appendCBOR(dst []byte, n *uir.Node, depth int) ([]byte, error) {
 		dst = cborHead(dst, 4, uint64(len(n.Children)))
 		for _, child := range n.Children {
 			var err error
-			dst, err = appendCBOR(dst, child, depth+1)
+			dst, err = appendCBOR(dst, child, depth+1, budget)
 			if err != nil {
 				return nil, err
 			}
@@ -130,12 +143,14 @@ func ParseCBOR(data []byte) (*uir.Node, error) {
 	if p.pos != len(data) {
 		return nil, fmt.Errorf("cbor: trailing bytes")
 	}
+	n.SetAnnotation("source_format", "cbor")
 	return n, nil
 }
 
 type cborParser struct {
-	data []byte
-	pos  int
+	data  []byte
+	pos   int
+	items int
 }
 
 func (p *cborParser) take(count uint64) ([]byte, error) {
@@ -148,6 +163,10 @@ func (p *cborParser) take(count uint64) ([]byte, error) {
 }
 
 func (p *cborParser) read(key string, depth int) (*uir.Node, error) {
+	p.items++
+	if p.items > cborMaxItems {
+		return nil, fmt.Errorf("cbor: item count exceeds %d", cborMaxItems)
+	}
 	if depth > cborMaxDepth {
 		return nil, fmt.Errorf("cbor: nesting exceeds %d", cborMaxDepth)
 	}
@@ -205,6 +224,13 @@ func (p *cborParser) read(key string, depth int) (*uir.Node, error) {
 		}
 		return uir.NewNode(uir.TypeString, key, string(b)), nil
 	case 4, 5:
+		maxEntries := uint64(cborMaxItems - p.items)
+		if major == 5 {
+			maxEntries /= 2
+		}
+		if value > maxEntries {
+			return nil, fmt.Errorf("cbor: item count exceeds %d", cborMaxItems)
+		}
 		remaining := uint64(len(p.data) - p.pos)
 		if value > remaining || major == 5 && value > remaining/2 {
 			return nil, fmt.Errorf("cbor: impossible container length")

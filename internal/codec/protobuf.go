@@ -454,6 +454,9 @@ func decodeFixed32Field(key string, bits uint32, schema *uir.Node) *uir.Node {
 	protoType := ""
 	if schema != nil {
 		protoType = schema.Annotation("proto_type")
+		if protoType == "" {
+			protoType = inferProtoType(schema)
+		}
 		key = schema.Key
 	}
 	switch protoType {
