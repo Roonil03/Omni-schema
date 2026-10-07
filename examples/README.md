@@ -14,7 +14,7 @@ Create `data.json`:
 {"id":42,"name":"Ada","active":true}
 ```
 
-Convert it to any of the nine supported targets:
+Convert it to any of the ten supported targets:
 
 ```bash
 curl -OJ -X POST http://localhost:8080/morph/json/msgpack -F "file=@data.json"
@@ -25,10 +25,18 @@ curl -OJ -X POST http://localhost:8080/morph/json/odata -F "file=@data.json"
 curl -OJ -X POST http://localhost:8080/morph/json/capnproto -F "file=@data.json"
 curl -OJ -X POST http://localhost:8080/morph/json/parquet -F "file=@data.json"
 curl -OJ -X POST http://localhost:8080/morph/json/hdf5 -F "file=@data.json"
+curl -OJ -X POST http://localhost:8080/morph/json/cbor -F "file=@data.json"
 curl -OJ -X POST http://localhost:8080/morph/json/json -F "file=@data.json"
 ```
 
-Every one of these formats is also accepted as a source, giving 81 source-to-target routes. See the [complete conversion matrix](../API_DOCUMENTATION.md#complete-conversion-matrix-81-pairwise-routes) and format aliases in the API documentation.
+Every one of these formats is also accepted as a source, giving 100 source-to-target routes. See the [complete conversion matrix](../API_DOCUMENTATION.md#complete-conversion-matrix-100-pairwise-routes) and format aliases in the API documentation.
+
+Decode the CBOR file back into JSON with a different filename to preserve the original:
+
+```bash
+curl --fail-with-body -X POST http://localhost:8080/morph/cbor/json \
+  -H "Content-Type: application/cbor" --data-binary @data.cbor -o roundtrip.json
+```
 
 ## Use a Protobuf schema
 
