@@ -1,10 +1,13 @@
 services:
   - type: web
-    name: morph-gateway
+    # Render regions are immutable; create a new free Singapore service.
+    name: morph-gateway-sg
+    branch: main
     env: docker
     dockerContext: .
     dockerfilePath: ./Docker/Dockerfile
     plan: free
+    region: singapore
     autoDeploy: false
     healthCheckPath: /readyz
     envVars:
